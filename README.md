@@ -21,7 +21,7 @@ Many workspaces share the name and branch `main`. The plugin asks Orca's CLI (`o
 - **Checks**: the checks of the newest commit on the shown branch. They are the workflow jobs, such as `test (ubuntu-latest)`, and outside checks, such as Codecov. Failed checks come first, then running, passed and skipped. The first eight show; the rest fold into one row.
 - **Retry**: a failed or cancelled check of a GitHub Actions run has a retry button. It runs `gh run rerun --failed` on that run. A check from outside GitHub Actions has no retry. Click a check to open it on GitHub.
 - **Branch picker**: lists the branches of your local checkouts of the same repository (every Orca worktree), then the default branch. The pick resets when you focus another workspace.
-- **Lock branch**: each card has a lock button (🔓). Press it and the card keeps its project and branch when you focus a workspace of another project, and it stays listed. The badge reads **Locked** or **Unlocked**. Picking another branch while locked moves the lock to it. Press the button again (🔒) to follow the focused workspace again. A card that was listed only because of its lock then disappears. The lock is stored on your machine and survives a restart.
+- **Lock branch**: each card has a switch. Turn it on and the card keeps its project and branch when you focus a workspace of another project, and it stays listed. The badge reads **Locked** or **Unlocked**. Picking another branch while locked moves the lock to it. Turn the switch off to follow the focused workspace again. A card that was listed only because of its lock then disappears. The lock is stored on your machine and survives a restart.
 - **State**: **Passing**, **Running** or **Failing**, from those checks.
 
 ## Releases tab

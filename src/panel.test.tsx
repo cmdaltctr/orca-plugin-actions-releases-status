@@ -292,7 +292,7 @@ test('the branch picker appears only when there is a branch to switch to, and as
   await view.unmount()
 })
 
-test('the lock button locks the branch and shows the Locked badge, and pressing it again unlocks', async () => {
+test('the lock switch locks the branch and shows the Locked badge, and turning it off unlocks', async () => {
   const sent: unknown[] = []
   const view = await mount(panel, {
     host: host({
@@ -307,12 +307,11 @@ test('the lock button locks the branch and shows the Locked badge, and pressing 
   })
   assert.equal(view.find({ type: 'Badge', text: 'Locked' }), null)
   assert.ok(view.find({ type: 'Badge', text: 'Unlocked' }))
-  await view.press({ text: '🔓' })
+  await view.toggle({ role: 'switch' })
   assert.deepEqual(sent, [{ projectId: 'acme/widget', locked: true }])
   assert.ok(view.find({ type: 'Badge', text: 'Locked' }))
   assert.equal(view.find({ type: 'Badge', text: 'Unlocked' }), null)
-  assert.equal(view.find({ text: '🔓' }), null)
-  await view.press({ text: '🔒' })
+  await view.toggle({ role: 'switch' })
   assert.deepEqual(sent[1], { projectId: 'acme/widget', locked: false })
   await view.unmount()
 })

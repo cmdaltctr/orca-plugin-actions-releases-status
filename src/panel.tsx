@@ -22,6 +22,7 @@ import {
   Link,
   Spinner,
   Stack,
+  Switch,
   Tab,
   Tabs,
   Text,
@@ -42,6 +43,8 @@ const view = atom<'actions' | 'releases'>('actions')
 /** Unsaved edits of the Settings fields, by project. */
 const settingsDraft = atom<Record<string, Partial<ProjectSettings>>>({})
 
+/** Orca needs a non-empty Switch label; this one shows nothing. */
+const ZERO_WIDTH = '\u200b'
 const TONE = { ok: 'success', running: 'accent', blocked: 'warning', failed: 'danger', unknown: 'neutral' } as const
 const RELEASE_WORDS: Record<Overall, string> = {
   ok: 'Up to date',
@@ -188,15 +191,12 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
           <Row gap="xs" align="center">
             <Badge tone={TONE[project.actions.overall]}>{ACTIONS_WORDS[project.actions.overall]}</Badge>
             {project.detected ? <Badge tone="neutral">This project</Badge> : null}
-            <Badge tone={project.locked ? 'accent' : 'neutral'}>{project.locked ? 'Locked' : 'Unlocked'}</Badge>
-            {/* Orca's icon set has no lock, so the button text carries the emoji. */}
-            <Button
-              variant="ghost"
-              tooltip={project.locked ? 'Unlock: follow the focused workspace again' : `Lock ${project.branch}: keep it when you switch project`}
-              onPress={() => void lockBranch(project.id, !project.locked)}
-            >
-              {project.locked ? '🔒' : '🔓'}
-            </Button>
+            <Badge tone={project.locked ? 'success' : 'warning'}>{project.locked ? 'Locked' : 'Unlocked'}</Badge>
+            <Switch
+              label={ZERO_WIDTH}
+              checked={project.locked}
+              onChange={(value) => void lockBranch(project.id, value)}
+            />
           </Row>
           {project.detected ? null : (
             <IconButton
