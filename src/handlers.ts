@@ -290,7 +290,8 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
   orca.panels.handle('run.rerun', async ({ projectId, runId }) => {
     const project = snapshot?.projects.find((p) => p.id === projectId)
     // Only a failed run the panel listed for this project, never an id from elsewhere.
-    if (!project?.checks.some((check) => check.runId === runId && check.rerunnable)) {
+    const rerunnable = [...project?.checks ?? [], ...(project?.releaseJobs.flatMap((group) => group.jobs) ?? [])]
+    if (!rerunnable.some((check) => check.runId === runId && check.rerunnable)) {
       return { ok: false, message: 'No failed run to re-run' }
     }
     try {

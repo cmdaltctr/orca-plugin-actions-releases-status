@@ -19,7 +19,7 @@ Many workspaces share the name and branch `main`. The plugin asks Orca's CLI (`o
 ## Actions tab
 
 - **Checks**: the checks of the newest commit on the shown branch. They are the workflow jobs, such as `test (ubuntu-latest)`, and outside checks, such as Codecov. Failed checks come first, then running, passed and skipped. The first eight show; the rest fold into one row.
-- **Retry**: a failed check of a GitHub Actions run has a retry button. It runs `gh run rerun --failed` on that run. A check from outside GitHub Actions has no retry. Click a check to open it on GitHub.
+- **Retry**: a failed or cancelled check of a GitHub Actions run has a retry button. It runs `gh run rerun --failed` on that run. A check from outside GitHub Actions has no retry. Click a check to open it on GitHub.
 - **Branch picker**: lists the branches of your local checkouts of the same repository (every Orca worktree), then the default branch. The pick resets when you focus another workspace.
 - **State**: **Passing**, **Running** or **Failing**, from those checks.
 
@@ -33,6 +33,8 @@ The plugin looks at the repository on GitHub. It needs no setup and no list of p
 | The same files, no public npm package | release-please | Release PR, Release run, GitHub release |
 | A workflow named `Release` | Release workflow | Release run, GitHub release |
 | None of these | no release flow | The card says what was looked for |
+
+When a release run has not passed, its card lists that run's jobs under the stages, failed and cancelled first. A failed or cancelled job has a retry button that runs `gh run rerun --failed` on the run. A run that passed lists no jobs. A desktop flow lists the jobs of the `Finalize Desktop Release` run the same way.
 
 Stages read the `main` branch, whatever branch the Actions tab shows. The release run is the newest run of the `Release` workflow on `main`. The badge is **Up to date**, **In progress**, **Needs you** or **Failed**. **Needs you** means the next step is yours, for example approving a staged npm version.
 

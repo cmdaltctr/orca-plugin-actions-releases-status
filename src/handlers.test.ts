@@ -54,6 +54,8 @@ interface World {
   packages: Record<string, { name?: string; private?: boolean }>
   /** While true, every `gh api` call fails. */
   apiDown: boolean
+  /** While true, the newest Release run on main failed. */
+  releaseFails: boolean
 }
 
 /** A stand-in for GitHub, git, npm and the updater. */
@@ -68,6 +70,7 @@ function fakeIo(world: Partial<World> = {}, calls: string[][] = [], terminalLook
     workflows: { 'acme/tool': ['CI', 'Release'] },
     packages: { [WIDGET]: { name: 'widget-pkg' } },
     apiDown: false,
+    releaseFails: false,
     ...world
   }
   return {
@@ -103,6 +106,14 @@ function fakeIo(world: Partial<World> = {}, calls: string[][] = [], terminalLook
         const sha = /^commits\/([^/]+)\/check-runs/.exec(rest ?? '')?.[1]
         return { check_runs: CHECKS_BY_SHA[sha ?? ''] ?? [] }
       }
+      if (args[0] === 'run' && args[1] === 'view') {
+        return {
+          jobs: [
+            { databaseId: 501, name: 'smoke macos-26', status: 'completed', conclusion: 'cancelled', url: 'https://j/501' },
+            { databaseId: 502, name: 'publish', status: 'completed', conclusion: 'success', url: 'https://j/502' }
+          ]
+        }
+      }
       if (args[0] === 'release' && args[1] === 'view') {
         return { assets: [] }
       }
@@ -117,7 +128,10 @@ function fakeIo(world: Partial<World> = {}, calls: string[][] = [], terminalLook
       const repo = args[args.indexOf('-R') + 1]
       if (args[0] === 'run') {
         const branch = args[args.indexOf('--branch') + 1]
-        return repo === WIDGET ? (WIDGET_RUNS[branch] ?? []) : [run(1, 'CI', 'SUCCESS')]
+        const widgetRuns = (WIDGET_RUNS[branch] ?? []).map((r) =>
+          w.releaseFails && r.databaseId === 5 ? { ...r, conclusion: 'FAILURE' } : r
+        )
+        return repo === WIDGET ? widgetRuns : [run(1, 'CI', 'SUCCESS')]
       }
       if (args[0] === 'pr') {
         return []
@@ -493,5 +507,28 @@ test('saving empty settings clears them, and removing a project drops its settin
   assert.deepEqual(host.data().storage.settings, { 'acme/tool': { agentPrompt: '/y', updaterUrl: '' } })
   await worker.request('project.remove', { repo: 'Acme/Tool' })
   assert.deepEqual(host.data().storage.settings, {})
+  await worker.deactivate()
+})
+
+test('a failed release run lists its jobs, and its cancelled job can be re-run', async () => {
+  const calls: string[][] = []
+  const worker = await mount(fakeIo({ releaseFails: true }, calls))
+  const [project] = (await worker.request('status.get')).projects
+  const [group] = project?.releaseJobs ?? []
+  assert.equal(group?.label, 'Release run')
+  assert.deepEqual(group?.jobs.map((job) => [job.name, job.state, job.rerunnable]), [['smoke macos-26', 'cancelled', true], ['publish', 'passed', false]])
+  assert.deepEqual(calls.find((c) => c[0] === 'run' && c[1] === 'view'), ['run', 'view', '5', '-R', WIDGET, '--json', 'jobs'])
+  const answer = await worker.request('run.rerun', { projectId: WIDGET, runId: 5 })
+  assert.equal(answer.ok, true)
+  assert.deepEqual(calls.find((c) => c[1] === 'rerun'), ['run', 'rerun', '5', '-R', WIDGET, '--failed'])
+  await worker.deactivate()
+})
+
+test('a release run that passed lists no jobs and asks GitHub for none', async () => {
+  const calls: string[][] = []
+  const worker = await mount(fakeIo({}, calls))
+  const [project] = (await worker.request('status.get')).projects
+  assert.deepEqual(project?.releaseJobs, [])
+  assert.equal(calls.some((c) => c[0] === 'run' && c[1] === 'view'), false)
   await worker.deactivate()
 })

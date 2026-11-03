@@ -143,7 +143,12 @@ export function setup(ctx: PanelContext): void {
   )
 }
 
-const CHECK_BADGE = { passed: ['success', 'Passed'], failed: ['danger', 'Failed'], idle: ['neutral', 'Skipped'] } as const
+const CHECK_BADGE = {
+  passed: ['success', 'Passed'],
+  failed: ['danger', 'Failed'],
+  cancelled: ['warning', 'Cancelled'],
+  idle: ['neutral', 'Skipped']
+} as const
 /** Checks shown before the rest fold into one "more" row. */
 const CHECKS_SHOWN = 8
 
@@ -280,6 +285,18 @@ function ReleaseCard({ project }: { project: ProjectStatus }) {
             ))}
           </List>
         ) : null}
+        {project.releaseJobs.map((group) => (
+          <Stack key={group.label} gap="xs">
+            <Text muted size="xs">{`Jobs of the ${group.label}`}</Text>
+            <Text truncate>
+              <Link href={group.url}>{group.title}</Link>
+            </Text>
+            {group.jobs.map((job) => (
+              <CheckLine key={job.id} project={project} check={job} />
+            ))}
+            {group.jobs.length === 0 ? <Text muted>Jobs unavailable. Open the run to see them.</Text> : null}
+          </Stack>
+        ))}
         {hasFlow && needsHelp && project.agentPrompt ? (
           <Row gap="xs" wrap>
             <Button

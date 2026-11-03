@@ -209,6 +209,31 @@ async function checksOfCommit(repo: string, sha: string, io: Io): Promise<Check[
   }
 }
 
+interface RawJob {
+  databaseId: number
+  name: string
+  status: string
+  conclusion: string | null
+  url: string
+}
+
+/** The jobs of one workflow run. A failed read shows none. */
+async function jobsOfRun(repo: string, run: Run, io: Io): Promise<Check[]> {
+  try {
+    const view = (await io.ghJson(['run', 'view', String(run.id), '-R', repo, '--json', 'jobs'])) as { jobs: RawJob[] }
+    return view.jobs.map((job) => ({
+      id: job.databaseId,
+      name: job.name,
+      status: job.status.toLowerCase(),
+      conclusion: job.conclusion?.toLowerCase() || null,
+      url: job.url,
+      runId: run.id
+    }))
+  } catch {
+    return []
+  }
+}
+
 /** The repository's default branch, or null when GitHub does not say. */
 export async function defaultBranch(repo: string, io: Io): Promise<string | null> {
   try {
@@ -237,12 +262,23 @@ export async function gatherFacts(def: ProjectDef, branch: string, io: Io): Prom
       : null,
     def.updaterUrl ? (io.getJson(def.updaterUrl) as Promise<{ version?: string }>) : null
   ])
+  // A release run that passed needs no job list. One that has not passed shows what failed.
+  const unfinished = [
+    { label: 'Release run', run: toRun(runs.find((r) => r.workflowName === 'Release')) },
+    ...(def.kind === 'release-workflow-desktop'
+      ? [{ label: 'Finalize run', run: toRun(runs.find((r) => r.workflowName === 'Finalize Desktop Release')) }]
+      : [])
+  ].filter((entry): entry is { label: string; run: Run } => entry.run !== null && entry.run.conclusion !== 'success')
+  const jobGroups = await Promise.all(
+    unfinished.map(async ({ label, run }) => ({ label, run, jobs: await jobsOfRun(def.repo, run, io) }))
+  )
   return {
     pr,
     // `gh run list` is newest first.
     releaseRun: toRun(runs.find((r) => r.workflowName === 'Release')),
     finalizeRun: toRun(runs.find((r) => r.workflowName === 'Finalize Desktop Release')),
     checks,
+    jobGroups,
     release,
     npmLatest: npm?.latest ?? null,
     updaterVersion: updater?.version ?? null

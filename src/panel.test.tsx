@@ -25,6 +25,7 @@ const widget: ProjectStatus = {
   summary: 'npm: v5.3.0 is released but npm latest is 5.2.0',
   actions: { overall: 'running', summary: 'Release is running on main' },
   stages: [{ id: 'npm', label: 'npm', state: 'blocked', detail: 'approve it', url: 'https://npm' }],
+  releaseJobs: [],
   branch: 'main',
   branches: ['main', 'v3'],
   checks: [check({ id: 9, name: 'Release', state: 'running', runId: 90, url: 'https://c/9' })],
@@ -42,6 +43,7 @@ const tool: ProjectStatus = {
   summary: 'CI failed on main',
   actions: { overall: 'failed', summary: 'CI failed on main' },
   stages: [],
+  releaseJobs: [],
   branch: 'main',
   branches: ['main'],
   checks: [
@@ -121,6 +123,58 @@ test('the Releases tab says so when there is no project, and never points at sou
   assert.ok(view.find({ type: 'EmptyState', label: 'No project yet' }))
   assert.equal(view.find({ text: /projects\.ts/ }), null)
   await view.unmount()
+})
+
+const failedRelease: ProjectStatus = {
+  ...widget,
+  overall: 'failed',
+  summary: 'Release run: Failed (failure): Merge pull request #232',
+  releaseJobs: [
+    {
+      label: 'Release run',
+      title: 'Merge pull request #232',
+      url: 'https://r/41',
+      jobs: [
+        check({ id: 21, name: 'smoke-macos / macos-26', state: 'cancelled', runId: 41, rerunnable: true, url: 'https://j/21' }),
+        check({ id: 22, name: 'publish', state: 'passed', runId: 41, url: 'https://j/22' })
+      ]
+    }
+  ]
+}
+
+test('the Releases tab lists the jobs of a release run that did not pass, with a retry on the cancelled one', async () => {
+  const sent: unknown[] = []
+  const view = await mount(panel, {
+    host: host({
+      requests: {
+        'status.get': () => only(failedRelease),
+        'run.rerun': (input: unknown) => {
+          sent.push(input)
+          return { ok: true, message: 'Re-running failed jobs of run 41' }
+        }
+      }
+    })
+  })
+  await view.select({ label: 'View' }, 'releases')
+  assert.ok(view.find({ text: 'Jobs of the Release run' }))
+  assert.ok(view.find({ type: 'Badge', text: 'Cancelled' }))
+  assert.ok(view.find({ type: 'Badge', text: 'Passed' }))
+  assert.equal(view.findAll({ type: 'IconButton', label: /Re-run/ }).length, 1)
+  await view.press({ label: 'Re-run failed jobs: smoke-macos / macos-26' })
+  assert.deepEqual(sent, [{ projectId: 'acme/widget', runId: 41 }])
+  assert.ok(view.find({ text: 'Re-running failed jobs of run 41' }))
+  await view.unmount()
+})
+
+test('the Releases tab shows no job list when every release run passed, and the Actions tab never shows it', async () => {
+  const view = await mount(panel, { host: host({ requests: { 'status.get': () => only(failedRelease) } }) })
+  assert.equal(view.find({ text: 'Jobs of the Release run' }), null)
+  await view.select({ label: 'View' }, 'releases')
+  await view.unmount()
+  const passing = await mount(panel, { host: host() })
+  await passing.select({ label: 'View' }, 'releases')
+  assert.equal(passing.find({ text: 'Jobs of the Release run' }), null)
+  await passing.unmount()
 })
 
 test('a running check shows a spinner and no retry button', async () => {

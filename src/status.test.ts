@@ -32,6 +32,7 @@ const facts = (over: Partial<Facts> = {}): Facts => ({
   releaseRun: run(),
   finalizeRun: null,
   checks: [],
+  jobGroups: [],
   release: { tag: 'v5.2.0', url: 'https://github.com/x/y/releases/tag/v5.2.0', assets: [] },
   npmLatest: '5.2.0',
   updaterVersion: null,
@@ -80,13 +81,14 @@ const check = (over: Partial<Check> = {}): Check => ({
   ...over
 })
 
-test('checks list failed first, then running, passed and skipped, and only failed workflow checks re-run', () => {
+test('checks list failed first, then cancelled, running, passed and skipped, and only failed or cancelled workflow checks re-run', () => {
   const checks = [
     check({ id: 1 }),
     check({ id: 2, status: 'in_progress', conclusion: null }),
     check({ id: 3, conclusion: 'failure' }),
     check({ id: 4, conclusion: 'skipped' }),
-    check({ id: 5, conclusion: 'failure', runId: null, url: 'https://codecov.io/x' })
+    check({ id: 5, conclusion: 'failure', runId: null, url: 'https://codecov.io/x' }),
+    check({ id: 6, conclusion: 'cancelled' })
   ]
   const rows = classify(def('npm'), facts({ checks }), view).checks
   assert.deepEqual(
@@ -94,6 +96,7 @@ test('checks list failed first, then running, passed and skipped, and only faile
     [
       [3, 'failed', true],
       [5, 'failed', false],
+      [6, 'cancelled', true],
       [2, 'running', false],
       [1, 'passed', false],
       [4, 'idle', false]
@@ -227,4 +230,30 @@ test('parseRepo reads remotes and plain names and rejects the rest', () => {
   assert.equal(parseRepo('https://github.com/acme/widget/pull/3'), null)
   assert.equal(parseRepo('--help/x'), null)
   assert.equal(parseRepo('widget'), null)
+})
+
+const releaseRun = run({ id: 41, conclusion: 'failure', title: 'Merge pull request #232' })
+
+test('the jobs of a release run that did not pass are listed, failed and cancelled first, and can re-run', () => {
+  const jobs = [
+    check({ id: 1, name: 'publish', runId: 41 }),
+    check({ id: 2, name: 'smoke-macos / macos-26', conclusion: 'cancelled', runId: 41 }),
+    check({ id: 3, name: 'report-failure', conclusion: 'skipped', runId: 41 })
+  ]
+  const status = classify(def('npm'), facts({ releaseRun, jobGroups: [{ label: 'Release run', run: releaseRun, jobs }] }), view)
+  assert.equal(status.releaseJobs.length, 1)
+  assert.equal(status.releaseJobs[0]?.label, 'Release run')
+  assert.equal(status.releaseJobs[0]?.title, 'Merge pull request #232')
+  assert.deepEqual(
+    status.releaseJobs[0]?.jobs.map((job) => [job.name, job.state, job.rerunnable]),
+    [
+      ['smoke-macos / macos-26', 'cancelled', true],
+      ['publish', 'passed', false],
+      ['report-failure', 'idle', false]
+    ]
+  )
+})
+
+test('a release project with no unfinished release run lists no jobs', () => {
+  assert.deepEqual(classify(def('npm'), facts(), view).releaseJobs, [])
 })

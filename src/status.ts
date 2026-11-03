@@ -1,6 +1,6 @@
 // Pure: turns what GitHub, npm and the updater said into stages and one overall state.
 import type { ProjectDef } from './projects'
-import type { CheckRow, Overall, ProjectStatus, RunState, Stage, StageState } from './protocol'
+import type { CheckRow, Overall, ProjectStatus, RunJobs, RunState, Stage, StageState } from './protocol'
 
 export interface Run {
   id: number
@@ -39,6 +39,8 @@ export interface Facts {
   finalizeRun: Run | null
   /** Checks of the newest commit on the viewed branch. */
   checks: Check[]
+  /** Jobs of the release runs that have not passed. */
+  jobGroups: { label: string; run: Run; jobs: Check[] }[]
   /** Newest published GitHub release. */
   release: { tag: string; url: string; assets: string[] } | null
   npmLatest: string | null
@@ -54,6 +56,9 @@ function stateOf(status: string, conclusion: string | null): RunState {
   if (conclusion === 'success') {
     return 'passed'
   }
+  if (conclusion === 'cancelled') {
+    return 'cancelled'
+  }
   return FAILED.has(conclusion ?? '') ? 'failed' : 'idle'
 }
 
@@ -64,12 +69,12 @@ const checkRow = (check: Check): CheckRow => {
     name: check.name,
     state,
     runId: check.runId,
-    rerunnable: state === 'failed' && check.runId !== null,
+    rerunnable: (state === 'failed' || state === 'cancelled') && check.runId !== null,
     url: check.url
   }
 }
 
-const ORDER: Record<RunState, number> = { failed: 0, running: 1, passed: 2, idle: 3 }
+const ORDER: Record<RunState, number> = { failed: 0, cancelled: 1, running: 2, passed: 3, idle: 4 }
 
 const bare = (tag: string): string => tag.replace(/^v/, '')
 
@@ -223,6 +228,12 @@ export interface View {
 export function classify(def: ProjectDef, f: Facts, view: View): ProjectStatus {
   const stages = stagesFor(def, f)
   const checks = f.checks.map(checkRow).sort((a, b) => ORDER[a.state] - ORDER[b.state])
+  const releaseJobs: RunJobs[] = f.jobGroups.map((group) => ({
+    label: group.label,
+    title: group.run.title,
+    url: group.run.url,
+    jobs: group.jobs.map(checkRow).sort((a, b) => ORDER[a.state] - ORDER[b.state])
+  }))
   const worst: StageState | undefined = RANK.find((state) => stages.some((s) => s.state === state))
   const lead = worst ? stages.find((s) => s.state === worst) : undefined
   const actions = actionsHealth(checks, view.branch)
@@ -242,6 +253,7 @@ export function classify(def: ProjectDef, f: Facts, view: View): ProjectStatus {
     ...health,
     actions,
     stages,
+    releaseJobs,
     branch: view.branch,
     branches: view.branches,
     checks,
@@ -262,6 +274,7 @@ export function unknownStatus(def: ProjectDef, error: unknown, view: View): Proj
     summary: `Lookup failed: ${message}`,
     actions: { overall: 'unknown', summary: `Lookup failed: ${message}` },
     stages: [],
+    releaseJobs: [],
     branch: view.branch,
     branches: view.branches,
     checks: []

@@ -11,7 +11,7 @@ export interface Stage {
   url?: string
 }
 
-export type RunState = 'running' | 'passed' | 'failed' | 'idle'
+export type RunState = 'running' | 'passed' | 'failed' | 'cancelled' | 'idle'
 /** One check of the newest commit on a branch: a workflow job, or an outside check such as Codecov. */
 export interface CheckRow {
   id: number
@@ -19,11 +19,20 @@ export interface CheckRow {
   state: RunState
   /** The workflow run the check belongs to; null for a check outside GitHub Actions. */
   runId: number | null
-  /** true for a failed check of a workflow run: `run.rerun` can retry that run's failed jobs. */
+  /** true for a failed or cancelled check of a workflow run: `run.rerun` can retry that run's failed jobs. */
   rerunnable: boolean
   url: string
 }
 /** What the user can set per project. Empty strings mean not set. */
+/** The jobs of one release run that did not pass, so the reader can see what failed and retry it. */
+export interface RunJobs {
+  /** `Release run` or `Finalize run`. */
+  label: string
+  title: string
+  url: string
+  jobs: CheckRow[]
+}
+
 export interface ProjectSettings {
   /** Slash command that hands the release to an agent. Starts with `/`. */
   agentPrompt: string
@@ -50,6 +59,8 @@ export interface ProjectStatus {
   actions: { overall: Overall; summary: string }
   /** Release stages. Empty for an `actions` project. */
   stages: Stage[]
+  /** The jobs of each release run that has not passed. Empty when every release run passed. */
+  releaseJobs: RunJobs[]
   /** The branch `runs` belong to. */
   branch: string
   /** Branches the panel can switch to: the git worktrees of this repository, then the default branch. */
