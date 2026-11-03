@@ -6,7 +6,7 @@ Orca's own Checks panel follows the workspace you have open. This panel also let
 
 ## Which projects it shows
 
-1. **This project** comes first. The panel reads the focused workspace, finds its GitHub `origin` remote and shows that repository. When focus moves to another project, this card changes with it.
+1. **This project** comes first. The panel reads the focused workspace, finds its GitHub `origin` remote and shows that repository. When focus moves to another project, this card changes with it, unless you locked its branch.
 2. **Added projects** come after. Type `owner/name` or a GitHub URL in **Add a project**. The plugin checks that `gh` can read the repository, then stores it. The remove button on a card drops it.
 
 Many workspaces share the name and branch `main`. The plugin asks Orca's CLI (`orca terminal list`) which workspace owns the focused terminal. If the CLI is not found, it falls back to matching branch and name, and says so when that is ambiguous.
@@ -21,6 +21,7 @@ Many workspaces share the name and branch `main`. The plugin asks Orca's CLI (`o
 - **Checks**: the checks of the newest commit on the shown branch. They are the workflow jobs, such as `test (ubuntu-latest)`, and outside checks, such as Codecov. Failed checks come first, then running, passed and skipped. The first eight show; the rest fold into one row.
 - **Retry**: a failed or cancelled check of a GitHub Actions run has a retry button. It runs `gh run rerun --failed` on that run. A check from outside GitHub Actions has no retry. Click a check to open it on GitHub.
 - **Branch picker**: lists the branches of your local checkouts of the same repository (every Orca worktree), then the default branch. The pick resets when you focus another workspace.
+- **Lock branch**: each card has a lock button (🔓). Press it and the card keeps its project and branch when you focus a workspace of another project, and it stays listed. The badge reads **Locked** or **Unlocked**. Picking another branch while locked moves the lock to it. Press the button again (🔒) to follow the focused workspace again. A card that was listed only because of its lock then disappears. The lock is stored on your machine and survives a restart.
 - **State**: **Passing**, **Running** or **Failing**, from those checks.
 
 ## Releases tab

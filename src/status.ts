@@ -223,6 +223,8 @@ export interface View {
   branch: string
   branches: string[]
   detected: boolean
+  /** The user locked this branch, so it stays when focus moves to another project. */
+  locked: boolean
 }
 
 export function classify(def: ProjectDef, f: Facts, view: View): ProjectStatus {
@@ -247,6 +249,7 @@ export function classify(def: ProjectDef, f: Facts, view: View): ProjectStatus {
     id: def.id,
     name: def.name,
     detected: view.detected,
+    locked: view.locked,
     flow: def.kind ? 'release' : 'actions',
     flowNote: flowNote(def),
     settings: def.settings,
@@ -267,6 +270,7 @@ export function unknownStatus(def: ProjectDef, error: unknown, view: View): Proj
     id: def.id,
     name: def.name,
     detected: view.detected,
+    locked: view.locked,
     flow: def.kind ? 'release' : 'actions',
     flowNote: flowNote(def),
     settings: def.settings,

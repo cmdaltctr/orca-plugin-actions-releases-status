@@ -46,6 +46,8 @@ export interface ProjectStatus {
   name: string
   /** true for the project of the focused workspace. */
   detected: boolean
+  /** true when the branch is locked: the card stays on it when focus moves to another project. */
+  locked: boolean
   /** `release` projects have a release flow and stages. `actions` projects show GitHub Actions only. */
   flow: 'release' | 'actions'
   /** The headline state: the release state for a `release` project, the Actions state otherwise. */
@@ -88,6 +90,8 @@ declare module 'orca' {
     'status.refresh': { output: StatusSnapshot }
     /** Shows the runs of another branch of one project. */
     'branch.select': { input: { projectId: string; branch: string }; output: StatusSnapshot }
+    /** Locks the branch now shown for a project, or unlocks it. A locked card stays on its branch and stays listed. */
+    'branch.lock': { input: { projectId: string; locked: boolean }; output: StatusSnapshot }
     /** Adds a repository (`owner/name` or a GitHub URL) after checking that `gh` can read it. */
     'project.add': { input: { repo: string }; output: { ok: boolean; message: string } }
     /** Saves the agent prompt and updater URL of one project the panel listed. Empty clears one. */

@@ -18,6 +18,7 @@ const widget: ProjectStatus = {
   id: 'acme/widget',
   name: 'Widget',
   detected: true,
+  locked: false,
   flow: 'release',
   flowNote: 'release-please, npm package widget-pkg',
   settings: { agentPrompt: '/release-agent', updaterUrl: '' },
@@ -36,6 +37,7 @@ const tool: ProjectStatus = {
   id: 'Acme/Tool',
   name: 'Tool',
   detected: false,
+  locked: false,
   flow: 'actions',
   flowNote: NO_FLOW,
   settings: { agentPrompt: '', updaterUrl: '' },
@@ -66,6 +68,7 @@ const host = (requests: Parameters<typeof mockHost>[0] = {}) =>
       'status.get': () => snapshot,
       'status.refresh': () => snapshot,
       'branch.select': () => snapshot,
+      'branch.lock': () => snapshot,
       'project.add': () => ({ ok: true, message: 'Added Acme/Tool' }),
       'project.remove': () => ({ ok: true, message: 'Removed Acme/Tool' }),
       'project.settings': () => ({ ok: true, message: 'Saved settings of Widget' }),
@@ -286,6 +289,31 @@ test('the branch picker appears only when there is a branch to switch to, and as
   assert.equal(view.findAll({ type: 'Select', label: /Branch of/ }).length, 1)
   await view.select({ label: 'Branch of Widget' }, 'v3')
   assert.deepEqual(sent, [{ projectId: 'acme/widget', branch: 'v3' }])
+  await view.unmount()
+})
+
+test('the lock button locks the branch and shows the Locked badge, and pressing it again unlocks', async () => {
+  const sent: unknown[] = []
+  const view = await mount(panel, {
+    host: host({
+      requests: {
+        'status.get': () => only(widget),
+        'branch.lock': (input: unknown) => {
+          sent.push(input)
+          return only({ ...widget, locked: true })
+        }
+      }
+    })
+  })
+  assert.equal(view.find({ type: 'Badge', text: 'Locked' }), null)
+  assert.ok(view.find({ type: 'Badge', text: 'Unlocked' }))
+  await view.press({ text: '🔓' })
+  assert.deepEqual(sent, [{ projectId: 'acme/widget', locked: true }])
+  assert.ok(view.find({ type: 'Badge', text: 'Locked' }))
+  assert.equal(view.find({ type: 'Badge', text: 'Unlocked' }), null)
+  assert.equal(view.find({ text: '🔓' }), null)
+  await view.press({ text: '🔒' })
+  assert.deepEqual(sent[1], { projectId: 'acme/widget', locked: false })
   await view.unmount()
 })
 

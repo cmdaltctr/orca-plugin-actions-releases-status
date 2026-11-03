@@ -245,6 +245,66 @@ test('moving focus to another workspace drops the picked branch', async () => {
   await worker.deactivate()
 })
 
+test('a locked branch survives moving focus to another project, which then shows next to it', async () => {
+  const focus = { id: 'w1' as string | null }
+  const host = hostFor(focus)
+  const worker = await mount(fakeIo(), host)
+  await worker.request('status.get')
+  await worker.request('branch.select', { projectId: WIDGET, branch: 'v3' })
+  const locked = (await worker.request('branch.lock', { projectId: WIDGET, locked: true })).projects[0]
+  assert.equal(locked?.locked, true)
+  assert.deepEqual(host.data().storage.locks, { [WIDGET.toLowerCase()]: { repo: WIDGET, branch: 'v3' } })
+  focus.id = 'w3'
+  const moved = (await worker.request('status.get')).projects
+  assert.deepEqual(moved.map((p) => [p.id, p.detected, p.branch, p.locked]), [
+    ['someone/else', true, 'feature-x', false],
+    [WIDGET, false, 'v3', true]
+  ])
+  assert.ok(moved[1]?.branches.includes('v3'))
+  focus.id = 'w1'
+  assert.equal((await worker.request('status.get')).projects[0]?.branch, 'v3')
+  await worker.deactivate()
+})
+
+test('unlocking returns to the focused branch, and a project only the lock listed disappears', async () => {
+  const focus = { id: 'w1' as string | null }
+  const worker = await mount(fakeIo(), hostFor(focus))
+  await worker.request('status.get')
+  await worker.request('branch.select', { projectId: WIDGET, branch: 'v3' })
+  await worker.request('branch.lock', { projectId: WIDGET, locked: true })
+  focus.id = 'w3'
+  await worker.request('status.get')
+  const after = await worker.request('branch.lock', { projectId: WIDGET, locked: false })
+  assert.deepEqual(after.projects.map((p) => p.id), ['someone/else'])
+  focus.id = 'w1'
+  const back = (await worker.request('status.get')).projects[0]
+  assert.deepEqual([back?.branch, back?.locked], ['main', false])
+  await worker.deactivate()
+})
+
+test('picking another branch while locked moves the lock to it', async () => {
+  const host = hostFor({ id: 'w1' })
+  const worker = await mount(fakeIo(), host)
+  await worker.request('status.get')
+  await worker.request('branch.lock', { projectId: WIDGET, locked: true })
+  const after = (await worker.request('branch.select', { projectId: WIDGET, branch: 'v3' })).projects[0]
+  assert.deepEqual([after?.branch, after?.locked], ['v3', true])
+  assert.deepEqual(host.data().storage.locks, { [WIDGET.toLowerCase()]: { repo: WIDGET, branch: 'v3' } })
+  await worker.deactivate()
+})
+
+test('branch.lock ignores a project that is not listed, and removing a project clears its lock', async () => {
+  const host = hostFor({ id: 'w1' }, { projects: ['Acme/Tool'] })
+  const worker = await mount(fakeIo(), host)
+  await worker.request('status.get')
+  await worker.request('branch.lock', { projectId: 'nobody/nothing', locked: true })
+  assert.equal(host.data().storage.locks, undefined)
+  await worker.request('branch.lock', { projectId: 'Acme/Tool', locked: true })
+  await worker.request('project.remove', { repo: 'Acme/Tool' })
+  assert.deepEqual(host.data().storage.locks, {})
+  await worker.deactivate()
+})
+
 test('project.add keeps the repository, after the detected project, under GitHub casing', async () => {
   const host = hostFor({ id: 'w1' })
   const worker = await mount(fakeIo(), host)

@@ -17,7 +17,7 @@ const def = (id: string) => {
   const flow = FLOWS[id]
   return flow ? projectDef(flow[0], flow[1], flow[2]) : projectDef(id, null)
 }
-const view: View = { branch: 'main', branches: ['main'], detected: true }
+const view: View = { branch: 'main', branches: ['main'], detected: true, locked: false }
 const run = (over: Partial<Run> = {}): Run => ({
   id: 7,
   status: 'completed',

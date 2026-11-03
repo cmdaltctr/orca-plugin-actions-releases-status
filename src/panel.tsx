@@ -95,6 +95,8 @@ async function act(task: () => Promise<{ message: string }>): Promise<void> {
   }
 }
 
+const lockBranch = (projectId: string, locked: boolean) =>
+  show(() => plugin.request('branch.lock', { projectId, locked }, REQUEST))
 const rerun = (projectId: string, runId: number) =>
   act(() => plugin.request('run.rerun', { projectId, runId }, REQUEST))
 const addProject = () =>
@@ -186,6 +188,15 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
           <Row gap="xs" align="center">
             <Badge tone={TONE[project.actions.overall]}>{ACTIONS_WORDS[project.actions.overall]}</Badge>
             {project.detected ? <Badge tone="neutral">This project</Badge> : null}
+            <Badge tone={project.locked ? 'accent' : 'neutral'}>{project.locked ? 'Locked' : 'Unlocked'}</Badge>
+            {/* Orca's icon set has no lock, so the button text carries the emoji. */}
+            <Button
+              variant="ghost"
+              tooltip={project.locked ? 'Unlock: follow the focused workspace again' : `Lock ${project.branch}: keep it when you switch project`}
+              onPress={() => void lockBranch(project.id, !project.locked)}
+            >
+              {project.locked ? '🔒' : '🔓'}
+            </Button>
           </Row>
           {project.detected ? null : (
             <IconButton

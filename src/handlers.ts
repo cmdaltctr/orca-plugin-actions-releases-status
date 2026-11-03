@@ -9,6 +9,13 @@ const FRESH_MS = 20_000
 const OVERALL_KEY = 'overall'
 const PROJECTS_KEY = 'projects'
 const SETTINGS_KEY = 'settings'
+const LOCKS_KEY = 'locks'
+
+/** A branch the user locked. The repository keeps its GitHub casing so the card can list it with no workspace. */
+interface Lock {
+  repo: string
+  branch: string
+}
 
 /** One row of the host's `workspace.list`. */
 interface Workspace {
@@ -139,12 +146,18 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
     return { workspaceId: focused.id, repo, focusedBranch: focused.branch, branches: [...new Set(branches)] }
   }
 
-  async function viewOf(repo: string, detected: Detected | null): Promise<View> {
+  async function viewOf(repo: string, detected: Detected | null, lock: Lock | undefined): Promise<View> {
     const fallback = await defaultBranchOf(repo)
     const options = [...new Set([...(detected?.branches ?? []), ...(fallback ? [fallback] : [])])]
     const picked = chosen.get(repo.toLowerCase())
-    const branch = picked && options.includes(picked) ? picked : (detected?.focusedBranch ?? fallback ?? 'main')
-    return { branch, branches: options.includes(branch) ? options : [...options, branch], detected: detected !== null }
+    // A lock holds its branch even when no workspace offers it any more.
+    const branch = lock?.branch ?? (picked && options.includes(picked) ? picked : (detected?.focusedBranch ?? fallback ?? 'main'))
+    return {
+      branch,
+      branches: options.includes(branch) ? options : [...options, branch],
+      detected: detected !== null,
+      locked: lock !== undefined
+    }
   }
 
   async function look(def: ProjectDef, view: View, force: boolean): Promise<ProjectStatus> {
@@ -166,6 +179,9 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
   const savedRepos = async (): Promise<string[]> => ((await orca.storage.get(PROJECTS_KEY)) as string[] | null) ?? []
   const savedSettings = async (): Promise<Record<string, ProjectSettings>> =>
     ((await orca.storage.get(SETTINGS_KEY)) as Record<string, ProjectSettings> | null) ?? {}
+
+  const savedLocks = async (): Promise<Record<string, Lock>> =>
+    ((await orca.storage.get(LOCKS_KEY)) as Record<string, Lock> | null) ?? {}
 
   /** Notifies when a release project newly needs you or newly fails. A project seen for the first time only sets the baseline. */
   async function notifyChanges(projects: ProjectStatus[]): Promise<void> {
@@ -198,14 +214,15 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
       }
       focusedBefore = found.workspaceId
     }
-    const repos = [...(found ? [found.repo] : []), ...(await savedRepos())]
+    const locks = await savedLocks()
+    const repos = [...(found ? [found.repo] : []), ...(await savedRepos()), ...Object.values(locks).map((lock) => lock.repo)]
     const unique = repos.filter((repo, i) => repos.findIndex((other) => sameRepo(other, repo)) === i)
     const settings = await savedSettings()
     const projects = await Promise.all(
       unique.map(async (repo) => {
         const owner = found && sameRepo(found.repo, repo) ? found : null
         const def = projectDef(repo, await flowOf(repo), settings[repo.toLowerCase()] ?? NO_SETTINGS)
-        return look(def, await viewOf(repo, owner), force)
+        return look(def, await viewOf(repo, owner, locks[repo.toLowerCase()]), force)
       })
     )
     snapshot = {
@@ -230,7 +247,24 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
 
   orca.panels.handle('branch.select', async ({ projectId, branch }) => {
     // `viewOf` ignores a branch the project does not offer.
-    chosen.set(projectId.toLowerCase(), branch)
+    const key = projectId.toLowerCase()
+    chosen.set(key, branch)
+    // A locked card follows a new pick, so the lock keeps what the reader sees.
+    const locks = await savedLocks()
+    const listed = snapshot?.projects.find((p) => p.id.toLowerCase() === key)
+    if (locks[key] && listed?.branches.includes(branch)) {
+      await orca.storage.set(LOCKS_KEY, { ...locks, [key]: { repo: locks[key].repo, branch } })
+    }
+    return refresh(false)
+  })
+
+  orca.panels.handle('branch.lock', async ({ projectId, locked }) => {
+    // Only a project the panel listed, locked on the branch it shows.
+    const listed = snapshot?.projects.find((p) => p.id === projectId)
+    if (listed) {
+      const { [listed.id.toLowerCase()]: _old, ...rest } = await savedLocks()
+      await orca.storage.set(LOCKS_KEY, locked ? { ...rest, [listed.id.toLowerCase()]: { repo: listed.id, branch: listed.branch } } : rest)
+    }
     return refresh(false)
   })
 
@@ -281,7 +315,9 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
     const saved = await savedRepos()
     const all = await savedSettings()
     delete all[repo.toLowerCase()]
+    const { [repo.toLowerCase()]: _unlocked, ...locks } = await savedLocks()
     await orca.storage.set(SETTINGS_KEY, all)
+    await orca.storage.set(LOCKS_KEY, locks)
     await orca.storage.set(PROJECTS_KEY, saved.filter((other) => !sameRepo(other, repo)))
     await refresh(false)
     return { ok: true, message: `Removed ${repo}` }
