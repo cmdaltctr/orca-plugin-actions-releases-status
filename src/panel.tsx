@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Card,
+  Collapsible,
   EmptyState,
   Heading,
   host,
@@ -26,7 +27,7 @@ import {
   Text,
   type PanelContext
 } from 'orca'
-import type { Overall, ProjectStatus, RunRow, StageState, StatusSnapshot } from './protocol'
+import type { CheckRow, Overall, ProjectSettings, ProjectStatus, StageState, StatusSnapshot } from './protocol'
 
 const POLL_MS = 60_000
 const REQUEST = { timeoutMs: 60_000 }
@@ -38,6 +39,8 @@ const agentOptions = atom<{ value: string; label: string }[]>([])
 const agentChoice = atom('')
 const draft = atom('')
 const view = atom<'actions' | 'releases'>('actions')
+/** Unsaved edits of the Settings fields, by project. */
+const settingsDraft = atom<Record<string, Partial<ProjectSettings>>>({})
 
 const TONE = { ok: 'success', running: 'accent', blocked: 'warning', failed: 'danger', unknown: 'neutral' } as const
 const RELEASE_WORDS: Record<Overall, string> = {
@@ -103,6 +106,26 @@ const addProject = () =>
     return answer
   })
 const removeProject = (repo: string) => act(() => plugin.request('project.remove', { repo }, REQUEST))
+const editSettings = (projectId: string, patch: Partial<ProjectSettings>) =>
+  set(settingsDraft, { ...read(settingsDraft), [projectId]: { ...read(settingsDraft)[projectId], ...patch } })
+const saveSettings = (project: ProjectStatus) =>
+  act(async () => {
+    const edits = read(settingsDraft)[project.id]
+    const answer = await plugin.request(
+      'project.settings',
+      {
+        projectId: project.id,
+        agentPrompt: edits?.agentPrompt ?? project.settings.agentPrompt,
+        updaterUrl: edits?.updaterUrl ?? project.settings.updaterUrl
+      },
+      REQUEST
+    )
+    if (answer.ok) {
+      const { [project.id]: _saved, ...rest } = read(settingsDraft)
+      set(settingsDraft, rest)
+    }
+    return answer
+  })
 const ask = (projectId: string) =>
   act(() => plugin.request('agent.ask', { projectId, terminalId: read(agentChoice) }, REQUEST))
 
@@ -120,34 +143,36 @@ export function setup(ctx: PanelContext): void {
   )
 }
 
-const RUN_BADGE = { passed: ['success', 'Passed'], failed: ['danger', 'Failed'], idle: ['neutral', 'Skipped'] } as const
+const CHECK_BADGE = { passed: ['success', 'Passed'], failed: ['danger', 'Failed'], idle: ['neutral', 'Skipped'] } as const
+/** Checks shown before the rest fold into one "more" row. */
+const CHECKS_SHOWN = 8
 
-function RunLine({ project, run }: { project: ProjectStatus; run: RunRow }) {
+function CheckLine({ project, check }: { project: ProjectStatus; check: CheckRow }) {
   return (
     <Row gap="xs" align="center" justify="between">
       <Row gap="xs" align="center">
-        {run.state === 'running' ? (
-          <Spinner label={`Running: ${run.title}`} labelHidden />
+        {check.state === 'running' ? (
+          <Spinner label={`Running: ${check.name}`} labelHidden />
         ) : (
-          <Badge tone={RUN_BADGE[run.state][0]}>{RUN_BADGE[run.state][1]}</Badge>
+          <Badge tone={CHECK_BADGE[check.state][0]}>{CHECK_BADGE[check.state][1]}</Badge>
         )}
         <Text truncate>
-          <Link href={run.url}>{run.title === run.workflow ? run.title : `${run.workflow}: ${run.title}`}</Link>
+          <Link href={check.url}>{check.name}</Link>
         </Text>
       </Row>
-      {run.rerunnable ? (
+      {check.rerunnable && check.runId !== null ? (
         <IconButton
           icon="refresh"
-          label={`Re-run failed jobs: ${run.title}`}
+          label={`Re-run failed jobs: ${check.name}`}
           variant="ghost"
-          onPress={() => void rerun(project.id, run.id)}
+          onPress={() => void rerun(project.id, check.runId as number)}
         />
       ) : null}
     </Row>
   )
 }
 
-/** The Actions tab: every workflow on one branch, with the branch picker and project controls. */
+/** The Actions tab: the checks of one branch's newest commit, with the branch picker and project controls. */
 function ActionsCard({ project }: { project: ProjectStatus }) {
   return (
     <Card title={project.name} description={project.actions.summary}>
@@ -176,28 +201,72 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
           />
         ) : null}
         <Stack gap="xs">
-          <Text muted size="xs">{`Workflows on ${project.branch}`}</Text>
-          {project.runs.length > 0 ? (
-            project.runs.map((run) => <RunLine key={run.id} project={project} run={run} />)
-          ) : (
-            <Text muted>{project.actions.overall === 'unknown' ? 'Runs unavailable' : `No runs on ${project.branch}`}</Text>
-          )}
+          <Text muted size="xs">{`Checks on ${project.branch}`}</Text>
+          {project.checks.slice(0, CHECKS_SHOWN).map((check) => (
+            <CheckLine key={check.id} project={project} check={check} />
+          ))}
+          {project.checks.length > CHECKS_SHOWN ? (
+            <Collapsible title={`${project.checks.length - CHECKS_SHOWN} more checks`}>
+              <Stack gap="xs">
+                {project.checks.slice(CHECKS_SHOWN).map((check) => (
+                  <CheckLine key={check.id} project={project} check={check} />
+                ))}
+              </Stack>
+            </Collapsible>
+          ) : null}
+          {project.checks.length === 0 ? (
+            <Text muted>{project.actions.overall === 'unknown' ? 'Checks unavailable' : `No checks on ${project.branch}`}</Text>
+          ) : null}
         </Stack>
       </Stack>
     </Card>
   )
 }
 
+/** Optional values the repository cannot show: the agent hand-off and the updater endpoint. */
+function SettingsForm({ project }: { project: ProjectStatus }) {
+  const edits = read(settingsDraft)[project.id]
+  return (
+    <Collapsible title="Settings" description="Optional">
+      <Stack gap="xs">
+        <Input
+          label={`Agent prompt of ${project.name}`}
+          placeholder="/your-release-command"
+          value={edits?.agentPrompt ?? project.settings.agentPrompt}
+          onChange={(value) => editSettings(project.id, { agentPrompt: value })}
+        />
+        <Input
+          label={`Updater URL of ${project.name}`}
+          placeholder="https://example.com/updates/latest.json"
+          value={edits?.updaterUrl ?? project.settings.updaterUrl}
+          onChange={(value) => editSettings(project.id, { updaterUrl: value })}
+        />
+        <Row gap="xs">
+          <Button variant="outline" onPress={() => void saveSettings(project)}>
+            Save settings
+          </Button>
+        </Row>
+      </Stack>
+    </Collapsible>
+  )
+}
+
 /** The Releases tab: where the release is stuck, and the agent hand-off. */
 function ReleaseCard({ project }: { project: ProjectStatus }) {
+  const hasFlow = project.flow === 'release'
   const needsHelp = project.overall === 'blocked' || project.overall === 'failed'
   return (
-    <Card title={project.name} description={project.summary}>
+    <Card title={project.name} description={hasFlow ? project.summary : project.flowNote}>
       <Stack gap="sm">
         <Row gap="xs" align="center">
-          <Badge tone={TONE[project.overall]}>{RELEASE_WORDS[project.overall]}</Badge>
+          {hasFlow ? (
+            <Badge tone={TONE[project.overall]}>{RELEASE_WORDS[project.overall]}</Badge>
+          ) : (
+            <Badge tone="neutral">No release flow</Badge>
+          )}
           {project.detected ? <Badge tone="neutral">This project</Badge> : null}
         </Row>
+        {hasFlow ? <Text muted size="xs">{`Found: ${project.flowNote}`}</Text> : null}
         {project.stages.length > 0 ? (
           <List label={`${project.name} stages`}>
             {project.stages.map((stage) => (
@@ -211,7 +280,7 @@ function ReleaseCard({ project }: { project: ProjectStatus }) {
             ))}
           </List>
         ) : null}
-        {needsHelp && project.agentPrompt ? (
+        {hasFlow && needsHelp && project.agentPrompt ? (
           <Row gap="xs" wrap>
             <Button
               variant="outline"
@@ -224,6 +293,7 @@ function ReleaseCard({ project }: { project: ProjectStatus }) {
             </Button>
           </Row>
         ) : null}
+        <SettingsForm project={project} />
       </Stack>
     </Card>
   )
@@ -256,8 +326,15 @@ function ActionsView({ projects }: { projects: ProjectStatus[] }) {
 
 function ReleasesView({ projects }: { projects: ProjectStatus[] }) {
   const options = read(agentOptions)
-  const releases = projects.filter((project) => project.flow === 'release')
-  const without = projects.filter((project) => project.flow !== 'release')
+  if (projects.length === 0) {
+    return (
+      <EmptyState
+        icon="rocket"
+        title="No project yet"
+        description="Focus a workspace with a GitHub origin, or add a repository on the Actions tab."
+      />
+    )
+  }
   return (
     <Stack gap="md">
       {options.length > 0 ? (
@@ -269,19 +346,9 @@ function ReleasesView({ projects }: { projects: ProjectStatus[] }) {
           onChange={(value) => set(agentChoice, value)}
         />
       ) : null}
-      {releases.map((project) => (
+      {projects.map((project) => (
         <ReleaseCard key={project.id} project={project} />
       ))}
-      {releases.length === 0 ? (
-        <EmptyState
-          icon="rocket"
-          title="No release flow here"
-          description="Releases show for repositories with a release flow set up in src/projects.ts."
-        />
-      ) : null}
-      {without.length > 0 && releases.length > 0 ? (
-        <Text muted size="xs">{`No release flow: ${without.map((project) => project.name).join(', ')}`}</Text>
-      ) : null}
     </Stack>
   )
 }

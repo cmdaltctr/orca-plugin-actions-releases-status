@@ -1,44 +1,56 @@
 import { assert, mockHost, mount, test } from 'orca/testing'
 import * as panel from './panel'
-import type { StatusSnapshot } from './protocol'
+import type { CheckRow, ProjectStatus, StatusSnapshot } from './protocol'
 
-const snapshot: StatusSnapshot = {
-  checkedAt: Date.UTC(2026, 10, 3, 9, 0),
-  projects: [
-    {
-      id: 'acme/widget',
-      name: 'Widget',
-      detected: true,
-      flow: 'release',
-      overall: 'blocked',
-      summary: 'npm: v5.3.0 is released but npm latest is 5.2.0',
-      actions: { overall: 'running', summary: 'Release is running on main' },
-      stages: [{ id: 'npm', label: 'npm', state: 'blocked', detail: 'approve it', url: 'https://npm' }],
-      branch: 'main',
-      branches: ['main', 'v3'],
-      runs: [
-        { id: 9, workflow: 'Release', title: 'chore: release 5.3.0', state: 'running', rerunnable: false, url: 'https://r/9' }
-      ],
-      agentPrompt: '/release-agent'
-    },
-    {
-      id: 'Acme/Tool',
-      name: 'Tool',
-      detected: false,
-      flow: 'actions',
-      overall: 'failed',
-      summary: 'CI failed on main',
-      actions: { overall: 'failed', summary: 'CI failed on main' },
-      stages: [],
-      branch: 'main',
-      branches: ['main'],
-      runs: [
-        { id: 3, workflow: 'CI', title: 'fix: broken thing', state: 'failed', rerunnable: true, url: 'https://r/3' },
-        { id: 2, workflow: 'CI', title: 'feat: older', state: 'passed', rerunnable: false, url: 'https://r/2' }
-      ]
-    }
+const NO_FLOW = 'No release flow found. Looked for release-please files and a workflow named Release.'
+
+const check = (over: Partial<CheckRow> = {}): CheckRow => ({
+  id: 1,
+  name: 'test (ubuntu-latest)',
+  state: 'passed',
+  runId: 10,
+  rerunnable: false,
+  url: 'https://c/1',
+  ...over
+})
+
+const widget: ProjectStatus = {
+  id: 'acme/widget',
+  name: 'Widget',
+  detected: true,
+  flow: 'release',
+  flowNote: 'release-please, npm package widget-pkg',
+  settings: { agentPrompt: '/release-agent', updaterUrl: '' },
+  overall: 'blocked',
+  summary: 'npm: v5.3.0 is released but npm latest is 5.2.0',
+  actions: { overall: 'running', summary: 'Release is running on main' },
+  stages: [{ id: 'npm', label: 'npm', state: 'blocked', detail: 'approve it', url: 'https://npm' }],
+  branch: 'main',
+  branches: ['main', 'v3'],
+  checks: [check({ id: 9, name: 'Release', state: 'running', runId: 90, url: 'https://c/9' })],
+  agentPrompt: '/release-agent'
+}
+
+const tool: ProjectStatus = {
+  id: 'Acme/Tool',
+  name: 'Tool',
+  detected: false,
+  flow: 'actions',
+  flowNote: NO_FLOW,
+  settings: { agentPrompt: '', updaterUrl: '' },
+  overall: 'failed',
+  summary: 'CI failed on main',
+  actions: { overall: 'failed', summary: 'CI failed on main' },
+  stages: [],
+  branch: 'main',
+  branches: ['main'],
+  checks: [
+    check({ id: 3, name: 'CI', state: 'failed', runId: 30, rerunnable: true, url: 'https://c/3' }),
+    check({ id: 2, name: 'lint', state: 'passed', runId: 30, url: 'https://c/2' })
   ]
 }
+
+const snapshot: StatusSnapshot = { checkedAt: Date.UTC(2026, 10, 3, 9, 0), projects: [widget, tool] }
 
 const host = (requests: Parameters<typeof mockHost>[0] = {}) =>
   mockHost({
@@ -54,11 +66,14 @@ const host = (requests: Parameters<typeof mockHost>[0] = {}) =>
       'branch.select': () => snapshot,
       'project.add': () => ({ ok: true, message: 'Added Acme/Tool' }),
       'project.remove': () => ({ ok: true, message: 'Removed Acme/Tool' }),
-      'run.rerun': () => ({ ok: true, message: 'Re-running failed jobs of run 3' }),
+      'project.settings': () => ({ ok: true, message: 'Saved settings of Widget' }),
+      'run.rerun': () => ({ ok: true, message: 'Re-running failed jobs of run 30' }),
       'agent.ask': () => ({ sent: true, message: 'Sent /release-agent' }),
       ...requests.requests
     }
   })
+
+const only = (project: ProjectStatus): StatusSnapshot => ({ ...snapshot, projects: [project] })
 
 test('shows each project with its state', async () => {
   const view = await mount(panel, { host: host() })
@@ -66,7 +81,7 @@ test('shows each project with its state', async () => {
   assert.ok(view.find({ type: 'Badge', text: 'Running' }))
   assert.ok(view.find({ type: 'Badge', text: 'Failing' }))
   assert.equal(view.findAll({ type: 'Badge', text: 'This project' }).length, 1)
-  assert.ok(view.find({ text: 'Workflows on main' }))
+  assert.ok(view.find({ text: 'Checks on main' }))
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.refusals, [])
   await view.unmount()
@@ -82,36 +97,40 @@ test('the Actions tab opens first and keeps release stages and the agent button 
   await view.unmount()
 })
 
-test('the Releases tab shows only release projects, with their stages and release state', async () => {
+test('the Releases tab shows every project: stages for a release flow, what was looked for otherwise', async () => {
   const view = await mount(panel, { host: host() })
   await view.select({ label: 'View' }, 'releases')
   assert.ok(view.find({ label: 'Widget' }))
   assert.ok(view.find({ label: 'Widget stages' }))
   assert.ok(view.find({ type: 'Badge', text: 'Needs you' }))
-  assert.equal(view.find({ label: 'Tool' }), null)
-  assert.ok(view.find({ text: 'No release flow: Tool' }))
-  assert.equal(view.find({ text: 'Workflows on main' }), null)
+  assert.ok(view.find({ text: 'Found: release-please, npm package widget-pkg' }))
+  assert.ok(view.find({ label: 'Tool' }))
+  assert.ok(view.find({ type: 'Badge', text: 'No release flow' }))
+  assert.ok(JSON.stringify(view.tree()).includes(NO_FLOW))
+  assert.equal(view.find({ text: 'Checks on main' }), null)
   assert.equal(view.find({ label: 'Repository' }), null)
   assert.deepEqual(view.errors, [])
   await view.unmount()
 })
 
-test('the Releases tab explains itself when no project has a release flow', async () => {
-  const onlyActions = { ...snapshot, projects: snapshot.projects.filter((p) => p.flow === 'actions') }
-  const view = await mount(panel, { host: host({ requests: { 'status.get': () => onlyActions } }) })
+test('the Releases tab says so when there is no project, and never points at source files', async () => {
+  const view = await mount(panel, {
+    host: host({ requests: { 'status.get': () => ({ ...snapshot, projects: [] }) } })
+  })
   await view.select({ label: 'View' }, 'releases')
-  assert.ok(view.find({ type: 'EmptyState', label: 'No release flow here' }))
+  assert.ok(view.find({ type: 'EmptyState', label: 'No project yet' }))
+  assert.equal(view.find({ text: /projects\.ts/ }), null)
   await view.unmount()
 })
 
-test('a running run shows a spinner and no retry button', async () => {
+test('a running check shows a spinner and no retry button', async () => {
   const view = await mount(panel, { host: host() })
-  assert.ok(view.find({ type: 'Spinner', label: 'Running: chore: release 5.3.0' }))
+  assert.ok(view.find({ type: 'Spinner', label: 'Running: Release' }))
   assert.equal(view.findAll({ type: 'Spinner' }).length, 1)
   await view.unmount()
 })
 
-test('only failed runs get a retry button, and pressing it re-runs that run', async () => {
+test('only a failed check of a workflow run gets a retry button, and pressing it re-runs that run', async () => {
   const sent: unknown[] = []
   const view = await mount(panel, {
     host: host({
@@ -119,15 +138,33 @@ test('only failed runs get a retry button, and pressing it re-runs that run', as
         'status.get': () => snapshot,
         'run.rerun': (input: unknown) => {
           sent.push(input)
-          return { ok: true, message: 'Re-running failed jobs of run 3' }
+          return { ok: true, message: 'Re-running failed jobs of run 30' }
         }
       }
     })
   })
   assert.equal(view.findAll({ type: 'IconButton', label: /Re-run/ }).length, 1)
-  await view.press({ label: 'Re-run failed jobs: fix: broken thing' })
-  assert.deepEqual(sent, [{ projectId: 'Acme/Tool', runId: 3 }])
-  assert.ok(view.find({ text: 'Re-running failed jobs of run 3' }))
+  await view.press({ label: 'Re-run failed jobs: CI' })
+  assert.deepEqual(sent, [{ projectId: 'Acme/Tool', runId: 30 }])
+  assert.ok(view.find({ text: 'Re-running failed jobs of run 30' }))
+  await view.unmount()
+})
+
+test('checks past the first eight fold into one row', async () => {
+  const many = Array.from({ length: 10 }, (_, i) => check({ id: 100 + i, name: `job ${i}` }))
+  const view = await mount(panel, {
+    host: host({ requests: { 'status.get': () => only({ ...tool, checks: many }) } })
+  })
+  assert.equal(view.findAll({ type: 'Badge', text: 'Passed' }).length, 8)
+  assert.ok(view.find({ label: '2 more checks' }))
+  await view.unmount()
+})
+
+test('a branch with no checks says so', async () => {
+  const view = await mount(panel, {
+    host: host({ requests: { 'status.get': () => only({ ...tool, checks: [], actions: { overall: 'ok', summary: 'No checks on main' } }) } })
+  })
+  assert.ok(view.find({ text: 'No checks on main' }))
   await view.unmount()
 })
 
@@ -143,6 +180,40 @@ test('Ask agent stays disabled until an agent terminal is picked', async () => {
     // An unmounted panel clears its polling timer; a failed test must not leave it running.
     await view.unmount()
   }
+})
+
+test('Settings holds the agent prompt and updater URL, and Save sends both', async () => {
+  const sent: unknown[] = []
+  const view = await mount(panel, {
+    host: host({
+      requests: {
+        'status.get': () => only(tool),
+        'project.settings': (input: unknown) => {
+          sent.push(input)
+          return { ok: true, message: 'Saved settings of Tool' }
+        }
+      }
+    })
+  })
+  await view.select({ label: 'View' }, 'releases')
+  await view.toggle({ label: 'Settings' })
+  await view.type({ label: 'Agent prompt of Tool' }, '/release-tool')
+  await view.type({ label: 'Updater URL of Tool' }, 'https://updates.example.com/latest.json')
+  await view.press({ text: 'Save settings' })
+  assert.deepEqual(sent, [
+    { projectId: 'Acme/Tool', agentPrompt: '/release-tool', updaterUrl: 'https://updates.example.com/latest.json' }
+  ])
+  assert.ok(view.find({ text: 'Saved settings of Tool' }))
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('Settings starts from the saved values', async () => {
+  const view = await mount(panel, { host: host({ requests: { 'status.get': () => only(widget) } }) })
+  await view.select({ label: 'View' }, 'releases')
+  await view.toggle({ label: 'Settings' })
+  assert.equal(view.valueOf({ label: 'Agent prompt of Widget' }), '/release-agent')
+  await view.unmount()
 })
 
 test('the branch picker appears only when there is a branch to switch to, and asks the worker', async () => {

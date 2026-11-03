@@ -12,16 +12,25 @@ export interface Stage {
 }
 
 export type RunState = 'running' | 'passed' | 'failed' | 'idle'
-/** One workflow run in the "Recent runs" list. */
-export interface RunRow {
+/** One check of the newest commit on a branch: a workflow job, or an outside check such as Codecov. */
+export interface CheckRow {
   id: number
-  workflow: string
-  title: string
+  name: string
   state: RunState
-  /** true for a completed failed run that `run.rerun` can retry. */
+  /** The workflow run the check belongs to; null for a check outside GitHub Actions. */
+  runId: number | null
+  /** true for a failed check of a workflow run: `run.rerun` can retry that run's failed jobs. */
   rerunnable: boolean
   url: string
 }
+/** What the user can set per project. Empty strings mean not set. */
+export interface ProjectSettings {
+  /** Slash command that hands the release to an agent. Starts with `/`. */
+  agentPrompt: string
+  /** https URL that answers JSON with the `version` clients are served. Turns on the Updater stage. */
+  updaterUrl: string
+}
+
 export interface ProjectStatus {
   /** The repository, `owner/name`. */
   id: string
@@ -34,6 +43,9 @@ export interface ProjectStatus {
   overall: Overall
   /** One line: the first problem, else what is running, else the latest version. */
   summary: string
+  /** One line on how the release flow was found, or that none was. */
+  flowNote: string
+  settings: ProjectSettings
   /** The state of the workflows on `branch`, whatever the flow. The Actions tab reads this. */
   actions: { overall: Overall; summary: string }
   /** Release stages. Empty for an `actions` project. */
@@ -42,8 +54,8 @@ export interface ProjectStatus {
   branch: string
   /** Branches the panel can switch to: the git worktrees of this repository, then the default branch. */
   branches: string[]
-  /** Every workflow's runs on `branch`, newest first. */
-  runs: RunRow[]
+  /** Checks of the newest commit on `branch`: failed first, then running, passed and skipped. */
+  checks: CheckRow[]
   /** The slash command that hands this project's release to an agent. */
   agentPrompt?: string
 }
@@ -67,6 +79,11 @@ declare module 'orca' {
     'branch.select': { input: { projectId: string; branch: string }; output: StatusSnapshot }
     /** Adds a repository (`owner/name` or a GitHub URL) after checking that `gh` can read it. */
     'project.add': { input: { repo: string }; output: { ok: boolean; message: string } }
+    /** Saves the agent prompt and updater URL of one project the panel listed. Empty clears one. */
+    'project.settings': {
+      input: { projectId: string } & ProjectSettings
+      output: { ok: boolean; message: string }
+    }
     /** Removes an added repository. The detected project cannot be removed. */
     'project.remove': { input: { repo: string }; output: { ok: boolean; message: string } }
     /** `gh run rerun --failed` on one failed run listed for the project. */

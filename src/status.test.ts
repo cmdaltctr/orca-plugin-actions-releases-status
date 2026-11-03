@@ -1,26 +1,22 @@
 import { assert, test } from 'orca/testing'
 import { checksOf } from './facts'
-import { parseRepo, projectDef, RELEASE_FLOWS } from './projects'
-import { classify, type Facts, type Run, type View } from './status'
+import { parseRepo, projectDef, settingsProblem, type DetectedFlow } from './projects'
+import { classify, type Check, type Facts, type Run, type View } from './status'
 
-// Release flows for the tests only: the plugin ships with none.
-RELEASE_FLOWS['acme/widget'] = {
-  name: 'Widget',
-  kind: 'release-please-npm',
-  npmPackage: 'widget-pkg',
-  releasePrBranch: 'release-please--branches--main--components--widget-pkg',
-  agentPrompt: '/release-agent'
+const FLOWS: Record<string, [string, DetectedFlow | null, { agentPrompt: string; updaterUrl: string }]> = {
+  npm: ['acme/widget', { kind: 'release-please-npm', npmPackage: 'widget-pkg' }, { agentPrompt: '/release-agent', updaterUrl: '' }],
+  please: ['acme/plain', { kind: 'release-please' }, { agentPrompt: '', updaterUrl: '' }],
+  workflow: ['acme/gadget', { kind: 'release-workflow' }, { agentPrompt: '', updaterUrl: '' }],
+  desktop: [
+    'acme/desktop',
+    { kind: 'release-workflow' },
+    { agentPrompt: '/release-desktop', updaterUrl: 'https://updates.example.com/desktop/latest.json' }
+  ]
 }
-RELEASE_FLOWS['acme/gadget'] = { name: 'Gadget', kind: 'semantic-release' }
-RELEASE_FLOWS['acme/desktop'] = {
-  name: 'Desktop',
-  kind: 'semantic-release-desktop',
-  updaterUrl: 'https://updates.example.com/desktop/stable/darwin/aarch64/0.0.1',
-  agentPrompt: '/release-desktop'
+const def = (id: string) => {
+  const flow = FLOWS[id]
+  return flow ? projectDef(flow[0], flow[1], flow[2]) : projectDef(id, null)
 }
-
-const REPOS: Record<string, string> = { npm: 'acme/widget', semantic: 'acme/gadget', desktop: 'acme/desktop' }
-const def = (id: string) => projectDef(REPOS[id] ?? id)
 const view: View = { branch: 'main', branches: ['main'], detected: true }
 const run = (over: Partial<Run> = {}): Run => ({
   id: 7,
@@ -35,7 +31,7 @@ const facts = (over: Partial<Facts> = {}): Facts => ({
   pr: null,
   releaseRun: run(),
   finalizeRun: null,
-  runs: [],
+  checks: [],
   release: { tag: 'v5.2.0', url: 'https://github.com/x/y/releases/tag/v5.2.0', assets: [] },
   npmLatest: '5.2.0',
   updaterVersion: null,
@@ -74,23 +70,33 @@ test('npm flow: failed release run fails the project and offers the agent', () =
   assert.equal(status.agentPrompt, '/release-agent')
 })
 
-test('runs list keeps order and marks only failed runs as re-runnable', () => {
-  const runs = [
-    run({ id: 1, status: 'in_progress', conclusion: null }),
-    run({ id: 2, conclusion: 'failure' }),
-    run({ id: 3, conclusion: 'timed_out' }),
-    run({ id: 4, conclusion: 'success' }),
-    run({ id: 5, conclusion: 'cancelled' })
+const check = (over: Partial<Check> = {}): Check => ({
+  id: 1,
+  name: 'test (ubuntu-latest)',
+  status: 'completed',
+  conclusion: 'success',
+  url: 'https://github.com/x/y/actions/runs/70/job/1',
+  runId: 70,
+  ...over
+})
+
+test('checks list failed first, then running, passed and skipped, and only failed workflow checks re-run', () => {
+  const checks = [
+    check({ id: 1 }),
+    check({ id: 2, status: 'in_progress', conclusion: null }),
+    check({ id: 3, conclusion: 'failure' }),
+    check({ id: 4, conclusion: 'skipped' }),
+    check({ id: 5, conclusion: 'failure', runId: null, url: 'https://codecov.io/x' })
   ]
-  const rows = classify(def('npm'), facts({ runs }), view).runs
+  const rows = classify(def('npm'), facts({ checks }), view).checks
   assert.deepEqual(
     rows.map((r) => [r.id, r.state, r.rerunnable]),
     [
-      [1, 'running', false],
-      [2, 'failed', true],
       [3, 'failed', true],
-      [4, 'passed', false],
-      [5, 'idle', false]
+      [5, 'failed', false],
+      [2, 'running', false],
+      [1, 'passed', false],
+      [4, 'idle', false]
     ]
   )
 })
@@ -133,17 +139,16 @@ test('desktop flow: treats a tag without a binary as normal', () => {
   assert.equal(status.overall, 'ok')
 })
 
-test('desktop flow: failed finalise run fails the project and shows its workflow', () => {
+test('desktop flow: failed finalise run fails the project and its updater stage', () => {
   const failed = run({ id: 11, conclusion: 'failure', workflow: 'Finalize Desktop Release' })
-  const status = desktop({ updaterVersion: '1.64.0', finalizeRun: failed, runs: [failed] })
+  const status = desktop({ updaterVersion: '1.64.0', finalizeRun: failed })
   assert.equal(status.overall, 'failed')
-  assert.equal(status.runs[0]?.workflow, 'Finalize Desktop Release')
-  assert.equal(status.runs[0]?.rerunnable, true)
+  assert.equal(status.stages.find((stage) => stage.id === 'updater')?.state, 'failed')
 })
 
-test('semantic-release flow: reports its release run', () => {
-  assert.equal(classify(def('semantic'), facts({ releaseRun: run({ conclusion: 'failure' }) }), view).overall, 'failed')
-  assert.equal(classify(def('semantic'), facts(), view).overall, 'ok')
+test('release-workflow flow: reports its release run', () => {
+  assert.equal(classify(def('workflow'), facts({ releaseRun: run({ conclusion: 'failure' }) }), view).overall, 'failed')
+  assert.equal(classify(def('workflow'), facts(), view).overall, 'ok')
 })
 
 test('check rollup: failure beats pending, pending beats pass, skipped passes', () => {
@@ -157,33 +162,59 @@ test('check rollup: failure beats pending, pending beats pass, skipped passes', 
   assert.equal(checksOf([{ state: 'FAILURE' }]), 'failed')
 })
 
-const actions = (runs: Run[], branch = 'v3') =>
-  classify(def('someone/else'), facts({ runs, releaseRun: null, release: null, npmLatest: null }), { ...view, branch })
+const actions = (checks: Check[], branch = 'v3') =>
+  classify(def('someone/else'), facts({ checks, releaseRun: null, release: null, npmLatest: null }), { ...view, branch })
 
-test('a repository with no release flow has no stages and is judged by the newest run of each workflow', () => {
-  const status = actions([
-    run({ id: 3, workflow: 'CI', conclusion: 'success' }),
-    run({ id: 2, workflow: 'Lint', conclusion: 'failure' }),
-    run({ id: 1, workflow: 'CI', conclusion: 'failure' })
-  ])
+test('a repository with no release flow has no stages and is judged by its checks', () => {
+  const status = actions([check({ id: 3 }), check({ id: 2, name: 'Lint', conclusion: 'failure' })])
   assert.equal(status.flow, 'actions')
   assert.deepEqual(status.stages, [])
   assert.equal(status.overall, 'failed')
   assert.equal(status.summary, 'Lint failed on v3')
+  assert.equal(status.flowNote, 'No release flow found. Looked for release-please files and a workflow named Release.')
 })
 
-test('an older failure is ignored once the same workflow passes again', () => {
-  const status = actions([
-    run({ id: 2, workflow: 'CI', conclusion: 'success' }),
-    run({ id: 1, workflow: 'CI', conclusion: 'failure' })
-  ])
-  assert.equal(status.overall, 'ok')
-  assert.equal(status.summary, 'All workflows passing on v3')
+test('actions health: all passing is ok, running beats ok, no checks says so', () => {
+  assert.equal(actions([check()]).summary, 'All checks passing on v3')
+  assert.equal(actions([check(), check({ id: 2, status: 'in_progress', conclusion: null })]).overall, 'running')
+  assert.equal(actions([]).summary, 'No checks on v3')
+  assert.equal(actions([]).overall, 'ok')
 })
 
-test('actions health: running beats ok, and no runs is ok', () => {
-  assert.equal(actions([run({ status: 'in_progress', conclusion: null })]).overall, 'running')
-  assert.equal(actions([]).summary, 'No workflow runs on v3')
+test('a release-please repository without an npm package ends its stages at the GitHub release', () => {
+  const status = classify(def('please'), facts({ pr: { number: 4, url: 'u', checks: 'passed' } }), view)
+  assert.deepEqual(status.stages.map((stage) => stage.id), ['pr', 'run', 'release'])
+  assert.equal(status.flowNote, 'release-please')
+})
+
+test('flow notes say how the flow was found', () => {
+  assert.equal(classify(def('npm'), facts(), view).flowNote, 'release-please, npm package widget-pkg')
+  assert.equal(classify(def('workflow'), facts(), view).flowNote, 'A workflow named Release')
+  assert.equal(classify(def('desktop'), facts(), view).flowNote, 'Release workflow with an updater URL')
+})
+
+test('an updater URL turns a Release workflow or no flow into a desktop flow, and leaves release-please alone', () => {
+  const url = { agentPrompt: '', updaterUrl: 'https://updates.example.com/x.json' }
+  assert.equal(projectDef('a/b', { kind: 'release-workflow' }, url).kind, 'release-workflow-desktop')
+  assert.equal(projectDef('a/b', null, url).kind, 'release-workflow-desktop')
+  assert.equal(projectDef('a/b', { kind: 'release-please' }, url).kind, 'release-please')
+  assert.equal(projectDef('a/b', { kind: 'release-workflow' }).kind, 'release-workflow')
+  assert.equal(projectDef('a/b', null).kind, undefined)
+})
+
+test('saved settings are carried to the status, set or not', () => {
+  const status = classify(def('npm'), facts(), view)
+  assert.deepEqual(status.settings, { agentPrompt: '/release-agent', updaterUrl: '' })
+  assert.equal(classify(def('someone/else'), facts(), view).agentPrompt, undefined)
+})
+
+test('settingsProblem accepts a slash command and an https URL, and names the problem otherwise', () => {
+  assert.equal(settingsProblem({ agentPrompt: '', updaterUrl: '' }), null)
+  assert.equal(settingsProblem({ agentPrompt: '/release-agent', updaterUrl: 'https://u.example.com/a.json' }), null)
+  assert.match(settingsProblem({ agentPrompt: 'rm -rf /', updaterUrl: '' }) ?? '', /start with \//)
+  assert.match(settingsProblem({ agentPrompt: '/a\n/b', updaterUrl: '' }) ?? '', /one line/)
+  assert.match(settingsProblem({ agentPrompt: '', updaterUrl: 'http://u.example.com' }) ?? '', /https/)
+  assert.match(settingsProblem({ agentPrompt: '', updaterUrl: 'not a url' }) ?? '', /https/)
 })
 
 test('parseRepo reads remotes and plain names and rejects the rest', () => {

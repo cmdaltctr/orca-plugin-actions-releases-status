@@ -1,8 +1,8 @@
 // Reads the facts `classify` needs. All network and process access goes through `Io`,
 // so tests can stand in for GitHub, npm and the updater.
 import { execFile } from 'node:child_process'
-import { parseRepo, RELEASE_BRANCH, type ProjectDef } from './projects'
-import { ACTION_RUNS, type Facts, type ReleasePr, type Run } from './status'
+import { parseRepo, RELEASE_BRANCH, type DetectedFlow, type ProjectDef } from './projects'
+import type { Check, Facts, ReleasePr, Run } from './status'
 
 export interface Io {
   ghJson(args: string[]): Promise<unknown>
@@ -78,6 +78,7 @@ interface RawRun {
   conclusion: string | null
   url: string
   displayTitle: string
+  headSha: string
 }
 
 interface RawCheck {
@@ -138,7 +139,7 @@ async function newestRelease(def: ProjectDef, io: Io): Promise<Facts['release']>
     return null
   }
   const url = `https://github.com/${def.repo}/releases/tag/${latest.tagName}`
-  if (def.kind !== 'semantic-release-desktop') {
+  if (def.kind !== 'release-workflow-desktop') {
     return { tag: latest.tagName, url, assets: [] }
   }
   const view = (await io.ghJson(['release', 'view', latest.tagName, '-R', def.repo, '--json', 'assets'])) as {
@@ -150,8 +151,63 @@ async function newestRelease(def: ProjectDef, io: Io): Promise<Facts['release']>
 const listRuns = (repo: string, branch: string, limit: number, io: Io): Promise<RawRun[]> =>
   io.ghJson([
     'run', 'list', '-R', repo, '--branch', branch, '--limit', String(limit),
-    '--json', 'databaseId,workflowName,status,conclusion,url,displayTitle'
+    '--json', 'databaseId,workflowName,status,conclusion,url,displayTitle,headSha'
   ]) as Promise<RawRun[]>
+
+async function npmPackageOf(repo: string, io: Io): Promise<string | null> {
+  try {
+    const file = (await io.ghJson(['api', `repos/${repo}/contents/package.json`])) as { content?: string }
+    const manifest = JSON.parse(Buffer.from(file.content ?? '', 'base64').toString('utf8')) as { name?: string; private?: boolean }
+    return manifest.private ? null : (manifest.name ?? null)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Looks at the repository on GitHub for its release flow; null when it has none.
+ * Throws when GitHub cannot be read, so the caller does not remember a wrong answer.
+ */
+export async function detectFlow(repo: string, io: Io): Promise<DetectedFlow | null> {
+  const [files, workflows] = await Promise.all([
+    io.ghJson(['api', `repos/${repo}/contents`]) as Promise<{ name: string }[]>,
+    io.ghJson(['api', `repos/${repo}/actions/workflows?per_page=100`]) as Promise<{ workflows: { name: string }[] }>
+  ])
+  const names = new Set(files.map((file) => file.name))
+  if (names.has('release-please-config.json') || names.has('.release-please-manifest.json')) {
+    const npmPackage = names.has('package.json') ? await npmPackageOf(repo, io) : null
+    return npmPackage ? { kind: 'release-please-npm', npmPackage } : { kind: 'release-please' }
+  }
+  return workflows.workflows.some((workflow) => workflow.name === 'Release') ? { kind: 'release-workflow' } : null
+}
+
+interface RawCheckRun {
+  id: number
+  name: string
+  status: string
+  conclusion: string | null
+  html_url: string
+  details_url?: string | null
+}
+
+/** The checks of one commit: workflow jobs and outside checks such as Codecov. A failed read shows none. */
+async function checksOfCommit(repo: string, sha: string, io: Io): Promise<Check[]> {
+  try {
+    const answer = (await io.ghJson(['api', `repos/${repo}/commits/${sha}/check-runs?per_page=100`])) as {
+      check_runs: RawCheckRun[]
+    }
+    return answer.check_runs.map((raw) => ({
+      id: raw.id,
+      name: raw.name,
+      status: raw.status.toLowerCase(),
+      conclusion: raw.conclusion?.toLowerCase() || null,
+      url: raw.html_url,
+      runId: Number(/\/actions\/runs\/(\d+)/.exec(raw.details_url ?? raw.html_url)?.[1]) || null
+    }))
+  } catch {
+    return []
+  }
+}
 
 /** The repository's default branch, or null when GitHub does not say. */
 export async function defaultBranch(repo: string, io: Io): Promise<string | null> {
@@ -165,13 +221,15 @@ export async function defaultBranch(repo: string, io: Io): Promise<string | null
   }
 }
 
-/** `branch` is the branch whose runs are listed. The release stages always read the release branch. */
+/** `branch` is the branch whose checks are listed. The release stages always read the release branch. */
 export async function gatherFacts(def: ProjectDef, branch: string, io: Io): Promise<Facts> {
   // 100 runs, so busy CI runs on the release branch do not push the release runs out of the window.
   const releaseRuns = def.kind ? listRuns(def.repo, RELEASE_BRANCH, 100, io) : Promise.resolve([] as RawRun[])
-  const [runs, branchRuns, release, pr, npm, updater] = await Promise.all([
+  // Only the newest run is needed from another branch: its commit names the checks to show.
+  const branchRuns = def.kind && branch === RELEASE_BRANCH ? releaseRuns : listRuns(def.repo, branch, 1, io)
+  const [runs, checks, release, pr, npm, updater] = await Promise.all([
     releaseRuns,
-    def.kind && branch === RELEASE_BRANCH ? releaseRuns : listRuns(def.repo, branch, ACTION_RUNS, io),
+    branchRuns.then((newest) => (newest[0] ? checksOfCommit(def.repo, newest[0].headSha, io) : [])),
     def.kind ? newestRelease(def, io) : null,
     releasePr(def, io),
     def.npmPackage
@@ -184,7 +242,7 @@ export async function gatherFacts(def: ProjectDef, branch: string, io: Io): Prom
     // `gh run list` is newest first.
     releaseRun: toRun(runs.find((r) => r.workflowName === 'Release')),
     finalizeRun: toRun(runs.find((r) => r.workflowName === 'Finalize Desktop Release')),
-    runs: branchRuns.slice(0, ACTION_RUNS).map(fromRaw),
+    checks,
     release,
     npmLatest: npm?.latest ?? null,
     updaterVersion: updater?.version ?? null

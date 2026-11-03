@@ -1,39 +1,40 @@
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import type { Io } from './facts'
 import { register } from './handlers'
-import { RELEASE_FLOWS } from './projects'
-
-// Release flows for the tests only: the plugin ships with none.
-RELEASE_FLOWS['acme/widget'] = {
-  name: 'Widget',
-  kind: 'release-please-npm',
-  npmPackage: 'widget-pkg',
-  releasePrBranch: 'release-please--branches--main--components--widget-pkg',
-  agentPrompt: '/release-agent'
-}
-RELEASE_FLOWS['acme/gadget'] = { name: 'Gadget', kind: 'semantic-release' }
-RELEASE_FLOWS['acme/desktop'] = {
-  name: 'Desktop',
-  kind: 'semantic-release-desktop',
-  updaterUrl: 'https://updates.example.com/desktop/stable/darwin/aarch64/0.0.1',
-  agentPrompt: '/release-desktop'
-}
 
 const WIDGET = 'acme/widget'
 
-const run = (id: number, workflowName: string, conclusion: string, displayTitle = workflowName) => ({
+const run = (id: number, workflowName: string, conclusion: string, displayTitle = workflowName, headSha = 'sha-other') => ({
   databaseId: id,
   workflowName,
   status: 'COMPLETED',
   conclusion,
   url: `https://r/${id}`,
-  displayTitle
+  displayTitle,
+  headSha
 })
 
 /** Runs per branch of the widget repo. Other repos get one passing CI run on every branch. */
 const WIDGET_RUNS: Record<string, ReturnType<typeof run>[]> = {
-  main: [run(5, 'Release', 'SUCCESS'), run(4, 'CI', 'FAILURE'), run(3, 'Release', 'FAILURE', 'Older')],
-  v3: [run(9, 'CI', 'FAILURE', 'v3 work'), run(8, 'Lint', 'SUCCESS')]
+  main: [run(5, 'Release', 'SUCCESS', 'Release', 'sha-main'), run(4, 'CI', 'FAILURE', 'CI', 'sha-main'), run(3, 'Release', 'FAILURE', 'Older', 'sha-old')],
+  v3: [run(9, 'CI', 'FAILURE', 'v3 work', 'sha-v3'), run(8, 'Lint', 'SUCCESS', 'Lint', 'sha-v3')]
+}
+
+const checkRun = (id: number, name: string, conclusion: string | null, runId = 70) => ({
+  id,
+  name,
+  status: conclusion ? 'completed' : 'in_progress',
+  conclusion,
+  html_url: `https://c/${id}`,
+  details_url: `https://github.com/acme/widget/actions/runs/${runId}/job/${id}`
+})
+
+/** The checks of each commit, as GitHub's check-runs endpoint answers them. */
+const CHECKS_BY_SHA: Record<string, ReturnType<typeof checkRun>[]> = {
+  'sha-main': [checkRun(1, 'test (ubuntu-latest)', 'success'), checkRun(2, 'lint', 'failure', 71), checkRun(3, 'Coverage (Codecov)', null)],
+  'sha-v3': [checkRun(4, 'build', 'failure', 72), { ...checkRun(5, 'codecov/patch', 'failure'), details_url: null as unknown as string }],
+  'sha-other': [checkRun(6, 'build', 'success')],
+  'sha-fail': [checkRun(7, 'ci', 'failure')]
 }
 
 interface World {
@@ -45,6 +46,14 @@ interface World {
   readable: Record<string, string>
   /** Which workspace folder owns each terminal, as Orca's CLI would say. */
   terminals: Record<string, string>
+  /** Root files of each repository, by lower-case name. */
+  files: Record<string, string[]>
+  /** Workflow names of each repository, by lower-case name. */
+  workflows: Record<string, string[]>
+  /** The package.json of each repository, by lower-case name. */
+  packages: Record<string, { name?: string; private?: boolean }>
+  /** While true, every `gh api` call fails. */
+  apiDown: boolean
 }
 
 /** A stand-in for GitHub, git, npm and the updater. */
@@ -55,6 +64,10 @@ function fakeIo(world: Partial<World> = {}, calls: string[][] = [], terminalLook
     remotes: { '/p/widget': WIDGET, '/p/widget-v3': WIDGET, '/p/other': 'someone/else' },
     readable: { [WIDGET]: 'main', 'someone/else': 'trunk', 'Acme/Tool': 'main' },
     terminals: {},
+    files: { [WIDGET]: ['release-please-config.json', '.release-please-manifest.json', 'package.json', 'README.md'] },
+    workflows: { 'acme/tool': ['CI', 'Release'] },
+    packages: { [WIDGET]: { name: 'widget-pkg' } },
+    apiDown: false,
     ...world
   }
   return {
@@ -69,6 +82,30 @@ function fakeIo(world: Partial<World> = {}, calls: string[][] = [], terminalLook
     },
     ghJson: async (args) => {
       calls.push(args)
+      if (args[0] === 'api') {
+        if (world.apiDown) {
+          throw new Error('gh: api is down')
+        }
+        const [, repoPath, rest] = /^repos\/([^/]+\/[^/]+)\/(.*)$/.exec(args[1]) ?? []
+        const key = (repoPath ?? '').toLowerCase()
+        if (rest === 'contents') {
+          return (w.files[key] ?? []).map((name) => ({ name }))
+        }
+        if (rest === 'contents/package.json') {
+          if (!w.packages[key]) {
+            throw new Error('Not Found')
+          }
+          return { content: Buffer.from(JSON.stringify(w.packages[key])).toString('base64') }
+        }
+        if (rest?.startsWith('actions/workflows')) {
+          return { workflows: (w.workflows[key] ?? []).map((name) => ({ name })) }
+        }
+        const sha = /^commits\/([^/]+)\/check-runs/.exec(rest ?? '')?.[1]
+        return { check_runs: CHECKS_BY_SHA[sha ?? ''] ?? [] }
+      }
+      if (args[0] === 'release' && args[1] === 'view') {
+        return { assets: [] }
+      }
       if (args[0] === 'repo') {
         const repo = args[2]
         const found = Object.keys(w.readable).find((r) => r.toLowerCase() === repo.toLowerCase())
@@ -87,7 +124,10 @@ function fakeIo(world: Partial<World> = {}, calls: string[][] = [], terminalLook
       }
       return [{ tagName: w.tag }]
     },
-    getJson: async () => ({ latest: w.npm })
+    getJson: async (url) => {
+      calls.push(['get', url])
+      return { latest: w.npm }
+    }
   }
 }
 
@@ -159,14 +199,14 @@ test('a folder with no GitHub remote detects nothing', async () => {
   await worker.deactivate()
 })
 
-test('branch.select shows the runs of another branch, while release stages keep reading main', async () => {
+test('branch.select shows the checks of another branch, while release stages keep reading main', async () => {
   const calls: string[][] = []
   const worker = await mount(fakeIo({}, calls), hostFor({ id: 'w1' }))
   const before = (await worker.request('status.get')).projects[0]
-  assert.deepEqual(before?.runs.map((r) => r.id), [5, 4, 3])
+  assert.deepEqual(before?.checks.map((c) => c.id), [2, 3, 1])
   const after = (await worker.request('branch.select', { projectId: WIDGET, branch: 'v3' })).projects[0]
   assert.equal(after?.branch, 'v3')
-  assert.deepEqual(after?.runs.map((r) => [r.id, r.workflow, r.rerunnable]), [[9, 'CI', true], [8, 'Lint', false]])
+  assert.deepEqual(after?.checks.map((c) => [c.id, c.name, c.rerunnable]), [[4, 'build', true], [5, 'codecov/patch', false]])
   assert.equal(after?.stages.find((s) => s.id === 'run')?.state, 'done')
   await worker.deactivate()
 })
@@ -243,14 +283,14 @@ test('a release project that newly needs you sends one notification', async () =
   await worker.request('status.refresh')
   const sent = host.callsOf('notifications.show')
   assert.equal(sent.length, 1)
-  assert.equal((sent[0] as { title: string }).title, 'Widget: needs you')
+  assert.equal((sent[0] as { title: string }).title, 'widget: needs you')
   await worker.deactivate()
 })
 
 test('failing Actions on a repository with no release flow never notify', async () => {
   const host = hostFor({ id: 'w3' }, { overall: { 'someone/else': 'ok' } })
   const io = fakeIo()
-  const worker = await mount({ ...io, ghJson: async (args) => (args[0] === 'run' ? [run(2, 'CI', 'FAILURE')] : io.ghJson(args)) }, host)
+  const worker = await mount({ ...io, ghJson: async (args) => (args[0] === 'run' ? [run(2, 'CI', 'FAILURE', 'CI', 'sha-fail')] : io.ghJson(args)) }, host)
   const [project] = (await worker.request('status.refresh')).projects
   assert.equal(project?.overall, 'failed')
   assert.equal(host.callsOf('notifications.show').length, 0)
@@ -267,29 +307,30 @@ test('a failed lookup does not reset the stored state', async () => {
   await worker.deactivate()
 })
 
-test('run.rerun retries the chosen failed run of that project', async () => {
+test('run.rerun retries the run of a failed check of that project', async () => {
   const calls: string[][] = []
   const worker = await mount(fakeIo({}, calls))
   await worker.request('status.get')
-  const answer = await worker.request('run.rerun', { projectId: WIDGET, runId: 4 })
+  const answer = await worker.request('run.rerun', { projectId: WIDGET, runId: 71 })
   assert.equal(answer.ok, true)
-  assert.deepEqual(calls.find((c) => c[1] === 'rerun'), ['run', 'rerun', '4', '-R', WIDGET, '--failed'])
+  assert.deepEqual(calls.find((c) => c[1] === 'rerun'), ['run', 'rerun', '71', '-R', WIDGET, '--failed'])
   await worker.deactivate()
 })
 
-test('run.rerun refuses a run that is not a failed run of that project', async () => {
+test('run.rerun refuses a run with no failed check, an unknown run and another project', async () => {
   const calls: string[][] = []
   const worker = await mount(fakeIo({}, calls))
   await worker.request('status.get')
-  assert.equal((await worker.request('run.rerun', { projectId: WIDGET, runId: 5 })).ok, false)
+  assert.equal((await worker.request('run.rerun', { projectId: WIDGET, runId: 70 })).ok, false)
   assert.equal((await worker.request('run.rerun', { projectId: WIDGET, runId: 99 })).ok, false)
-  assert.equal((await worker.request('run.rerun', { projectId: 'someone/else', runId: 4 })).ok, false)
+  assert.equal((await worker.request('run.rerun', { projectId: 'someone/else', runId: 71 })).ok, false)
   assert.equal(calls.some((c) => c[1] === 'rerun'), false)
   await worker.deactivate()
 })
 
-test('agent.ask types the prompt only into a listed agent terminal', async () => {
+test('agent.ask types the saved prompt only into a listed agent terminal', async () => {
   const host = mockHost({
+    storage: { settings: { [WIDGET]: { agentPrompt: '/release-agent', updaterUrl: '' } } },
     results: {
       'workspace.readContext': () => ({ branch: 'main', displayName: 'widget', terminals: [] }),
       'workspace.list': () => ({ workspaces: WORKSPACES, truncated: false }),
@@ -349,5 +390,108 @@ test('without a terminal answer, identical workspaces stay undetected and say wh
   const snapshot = await worker.request('status.get')
   assert.deepEqual(snapshot.projects, [])
   assert.match(snapshot.detectNote ?? '', /cannot tell which one is focused/)
+  await worker.deactivate()
+})
+
+test('release-please files and an npm package give the full npm flow', async () => {
+  const worker = await mount(fakeIo())
+  const [project] = (await worker.request('status.get')).projects
+  assert.equal(project?.flow, 'release')
+  assert.equal(project?.flowNote, 'release-please, npm package widget-pkg')
+  assert.deepEqual(project?.stages.map((stage) => stage.id), ['pr', 'run', 'npm'])
+  await worker.deactivate()
+})
+
+test('release-please files with a private or missing package.json end at the GitHub release', async () => {
+  for (const packages of [{ [WIDGET]: { name: 'widget-pkg', private: true } }, {}]) {
+    const worker = await mount(fakeIo({ packages }))
+    const [project] = (await worker.request('status.get')).projects
+    assert.equal(project?.flowNote, 'release-please')
+    assert.deepEqual(project?.stages.map((stage) => stage.id), ['pr', 'run', 'release'])
+    await worker.deactivate()
+  }
+})
+
+test('a workflow named Release gives the release-workflow flow, and no signs give none', async () => {
+  const host = hostFor({ id: 'w1' }, { projects: ['Acme/Tool'] })
+  const worker = await mount(fakeIo({ readable: { [WIDGET]: 'main', 'Acme/Tool': 'main' }, files: {} }), host)
+  const [widget, tool] = (await worker.request('status.get')).projects
+  assert.equal(widget?.flow, 'actions')
+  assert.equal(tool?.flowNote, 'A workflow named Release')
+  assert.deepEqual(tool?.stages.map((stage) => stage.id), ['run', 'release'])
+  await worker.deactivate()
+})
+
+test('a repository GitHub cannot be read for shows Actions only and is looked at again next time', async () => {
+  const world = { apiDown: true }
+  const worker = await mount(fakeIo(world))
+  assert.equal((await worker.request('status.get')).projects[0]?.flow, 'actions')
+  world.apiDown = false
+  assert.equal((await worker.request('status.refresh')).projects[0]?.flow, 'release')
+  await worker.deactivate()
+})
+
+test('the flow is read from GitHub once per repository', async () => {
+  const calls: string[][] = []
+  const worker = await mount(fakeIo({}, calls))
+  await worker.request('status.get')
+  await worker.request('status.refresh')
+  assert.equal(calls.filter((c) => c[0] === 'api' && c[1].endsWith('/contents')).length, 1)
+  await worker.deactivate()
+})
+
+test('project.settings saves, shows in the snapshot and gives the project its agent prompt', async () => {
+  const host = hostFor({ id: 'w1' })
+  const worker = await mount(fakeIo(), host)
+  await worker.request('status.get')
+  const answer = await worker.request('project.settings', { projectId: WIDGET, agentPrompt: ' /release-agent ', updaterUrl: '' })
+  assert.deepEqual(answer, { ok: true, message: 'Saved settings of widget' })
+  assert.deepEqual(host.data().storage.settings, { [WIDGET]: { agentPrompt: '/release-agent', updaterUrl: '' } })
+  const [project] = (await worker.request('status.get')).projects
+  assert.deepEqual(project?.settings, { agentPrompt: '/release-agent', updaterUrl: '' })
+  assert.equal(project?.agentPrompt, '/release-agent')
+  await worker.deactivate()
+})
+
+test('an updater URL gives a repository with no flow the desktop flow with an Updater stage', async () => {
+  const calls: string[][] = []
+  const worker = await mount(fakeIo({}, calls), hostFor({ id: 'w3' }))
+  await worker.request('status.get')
+  assert.equal(calls.some((c) => c[0] === 'get'), false)
+  await worker.request('project.settings', { projectId: 'someone/else', agentPrompt: '', updaterUrl: 'https://updates.example.com/latest.json' })
+  const [project] = (await worker.request('status.get')).projects
+  assert.equal(project?.flow, 'release')
+  assert.equal(project?.flowNote, 'Release workflow with an updater URL')
+  assert.ok(project?.stages.some((stage) => stage.id === 'updater'))
+  // The saved URL changes what is read, so a look cached before it must not be reused.
+  assert.ok(calls.some((c) => c[0] === 'get' && c[1] === 'https://updates.example.com/latest.json'))
+  await worker.deactivate()
+})
+
+test('project.settings refuses bad values and unlisted projects and stores nothing', async () => {
+  const host = hostFor({ id: 'w1' })
+  const worker = await mount(fakeIo(), host)
+  await worker.request('status.get')
+  const bad = [
+    { projectId: WIDGET, agentPrompt: 'rm -rf /', updaterUrl: '' },
+    { projectId: WIDGET, agentPrompt: '/a\n/b', updaterUrl: '' },
+    { projectId: WIDGET, agentPrompt: '', updaterUrl: 'http://updates.example.com' },
+    { projectId: 'stranger/repo', agentPrompt: '/x', updaterUrl: '' }
+  ]
+  for (const input of bad) {
+    assert.equal((await worker.request('project.settings', input)).ok, false)
+  }
+  assert.equal(host.data().storage.settings, undefined)
+  await worker.deactivate()
+})
+
+test('saving empty settings clears them, and removing a project drops its settings', async () => {
+  const host = hostFor({ id: 'w1' }, { projects: ['Acme/Tool'], settings: { [WIDGET]: { agentPrompt: '/x', updaterUrl: '' }, 'acme/tool': { agentPrompt: '/y', updaterUrl: '' } } })
+  const worker = await mount(fakeIo(), host)
+  await worker.request('status.get')
+  await worker.request('project.settings', { projectId: WIDGET, agentPrompt: '', updaterUrl: '' })
+  assert.deepEqual(host.data().storage.settings, { 'acme/tool': { agentPrompt: '/y', updaterUrl: '' } })
+  await worker.request('project.remove', { repo: 'Acme/Tool' })
+  assert.deepEqual(host.data().storage.settings, {})
   await worker.deactivate()
 })

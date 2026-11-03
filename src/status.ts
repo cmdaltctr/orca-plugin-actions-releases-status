@@ -1,6 +1,6 @@
 // Pure: turns what GitHub, npm and the updater said into stages and one overall state.
 import type { ProjectDef } from './projects'
-import type { Overall, ProjectStatus, RunRow, RunState, Stage, StageState } from './protocol'
+import type { CheckRow, Overall, ProjectStatus, RunState, Stage, StageState } from './protocol'
 
 export interface Run {
   id: number
@@ -18,6 +18,18 @@ export interface ReleasePr {
   checks: 'pending' | 'failed' | 'passed'
 }
 
+/** One check run of a commit, as GitHub reports it. */
+export interface Check {
+  id: number
+  name: string
+  /** `queued`, `in_progress` or `completed`. */
+  status: string
+  conclusion: string | null
+  url: string
+  /** The workflow run it belongs to, when it comes from GitHub Actions. */
+  runId: number | null
+}
+
 export interface Facts {
   /** Open release-please PR. */
   pr: ReleasePr | null
@@ -25,37 +37,39 @@ export interface Facts {
   releaseRun: Run | null
   /** Newest "Finalize Desktop Release" run on main. */
   finalizeRun: Run | null
-  /** Every workflow's newest runs on the viewed branch, newest first. */
-  runs: Run[]
+  /** Checks of the newest commit on the viewed branch. */
+  checks: Check[]
   /** Newest published GitHub release. */
   release: { tag: string; url: string; assets: string[] } | null
   npmLatest: string | null
   updaterVersion: string | null
 }
 
-/** How many runs the panel lists per project. */
-export const ACTION_RUNS = 12
-
 const FAILED = new Set(['failure', 'timed_out'])
 
-function runState(run: Run): RunState {
-  if (run.status !== 'completed') {
+function stateOf(status: string, conclusion: string | null): RunState {
+  if (status !== 'completed') {
     return 'running'
   }
-  if (run.conclusion === 'success') {
+  if (conclusion === 'success') {
     return 'passed'
   }
-  return FAILED.has(run.conclusion ?? '') ? 'failed' : 'idle'
+  return FAILED.has(conclusion ?? '') ? 'failed' : 'idle'
 }
 
-const runRow = (run: Run): RunRow => ({
-  id: run.id,
-  workflow: run.workflow,
-  title: run.title,
-  state: runState(run),
-  rerunnable: runState(run) === 'failed',
-  url: run.url
-})
+const checkRow = (check: Check): CheckRow => {
+  const state = stateOf(check.status, check.conclusion)
+  return {
+    id: check.id,
+    name: check.name,
+    state,
+    runId: check.runId,
+    rerunnable: state === 'failed' && check.runId !== null,
+    url: check.url
+  }
+}
+
+const ORDER: Record<RunState, number> = { failed: 0, running: 1, passed: 2, idle: 3 }
 
 const bare = (tag: string): string => tag.replace(/^v/, '')
 
@@ -157,9 +171,11 @@ function stagesFor(def: ProjectDef, f: Facts): Stage[] {
       return []
     case 'release-please-npm':
       return [prStage(f.pr), runStage('run', 'Release run', f.releaseRun), npmStage(def, f)]
-    case 'semantic-release':
+    case 'release-please':
+      return [prStage(f.pr), runStage('run', 'Release run', f.releaseRun), githubReleaseStage(f)]
+    case 'release-workflow':
       return [runStage('run', 'Release run', f.releaseRun), githubReleaseStage(f)]
-    case 'semantic-release-desktop':
+    case 'release-workflow-desktop':
       return [runStage('run', 'Release run', f.releaseRun), githubReleaseStage(f), updaterStage(f)]
   }
 }
@@ -167,21 +183,37 @@ function stagesFor(def: ProjectDef, f: Facts): Stage[] {
 /** Worst first: the project takes the state of its worst stage. */
 const RANK: ('failed' | 'blocked' | 'running')[] = ['failed', 'blocked', 'running']
 
-/** For a repository with no release flow: the newest run of each workflow decides. */
-function actionsHealth(rows: RunRow[], branch: string): { overall: Overall; summary: string } {
-  const newest = rows.filter((row, i) => rows.findIndex((other) => other.workflow === row.workflow) === i)
-  const failed = newest.find((row) => row.state === 'failed')
+/** The state of the newest commit's checks on the shown branch. */
+function actionsHealth(rows: CheckRow[], branch: string): { overall: Overall; summary: string } {
+  const failed = rows.find((row) => row.state === 'failed')
   if (failed) {
-    return { overall: 'failed', summary: `${failed.workflow} failed on ${branch}` }
+    return { overall: 'failed', summary: `${failed.name} failed on ${branch}` }
   }
-  const running = newest.find((row) => row.state === 'running')
+  const running = rows.find((row) => row.state === 'running')
   if (running) {
-    return { overall: 'running', summary: `${running.workflow} is running on ${branch}` }
+    return { overall: 'running', summary: `${running.name} is running on ${branch}` }
   }
-  return { overall: 'ok', summary: rows.length > 0 ? `All workflows passing on ${branch}` : `No workflow runs on ${branch}` }
+  return { overall: 'ok', summary: rows.length > 0 ? `All checks passing on ${branch}` : `No checks on ${branch}` }
 }
 
-/** Where the panel is looking: the branch whose runs are listed, the branches it can switch to, and whether the focused workspace owns the project. */
+const NO_FLOW = 'No release flow found. Looked for release-please files and a workflow named Release.'
+
+function flowNote(def: ProjectDef): string {
+  switch (def.kind) {
+    case 'release-please-npm':
+      return `release-please, npm package ${def.npmPackage}`
+    case 'release-please':
+      return 'release-please'
+    case 'release-workflow':
+      return 'A workflow named Release'
+    case 'release-workflow-desktop':
+      return 'Release workflow with an updater URL'
+    case undefined:
+      return NO_FLOW
+  }
+}
+
+/** Where the panel is looking: the branch whose checks are listed, the branches it can switch to, and whether the focused workspace owns the project. */
 export interface View {
   branch: string
   branches: string[]
@@ -190,10 +222,10 @@ export interface View {
 
 export function classify(def: ProjectDef, f: Facts, view: View): ProjectStatus {
   const stages = stagesFor(def, f)
-  const runs = f.runs.map(runRow)
+  const checks = f.checks.map(checkRow).sort((a, b) => ORDER[a.state] - ORDER[b.state])
   const worst: StageState | undefined = RANK.find((state) => stages.some((s) => s.state === state))
   const lead = worst ? stages.find((s) => s.state === worst) : undefined
-  const actions = actionsHealth(runs, view.branch)
+  const actions = actionsHealth(checks, view.branch)
   const health: { overall: Overall; summary: string } = def.kind
     ? {
         overall: worst ?? 'ok',
@@ -205,12 +237,14 @@ export function classify(def: ProjectDef, f: Facts, view: View): ProjectStatus {
     name: def.name,
     detected: view.detected,
     flow: def.kind ? 'release' : 'actions',
+    flowNote: flowNote(def),
+    settings: def.settings,
     ...health,
     actions,
     stages,
     branch: view.branch,
     branches: view.branches,
-    runs,
+    checks,
     ...(def.agentPrompt ? { agentPrompt: def.agentPrompt } : {})
   }
 }
@@ -222,12 +256,14 @@ export function unknownStatus(def: ProjectDef, error: unknown, view: View): Proj
     name: def.name,
     detected: view.detected,
     flow: def.kind ? 'release' : 'actions',
+    flowNote: flowNote(def),
+    settings: def.settings,
     overall: 'unknown',
     summary: `Lookup failed: ${message}`,
     actions: { overall: 'unknown', summary: `Lookup failed: ${message}` },
     stages: [],
     branch: view.branch,
     branches: view.branches,
-    runs: []
+    checks: []
   }
 }

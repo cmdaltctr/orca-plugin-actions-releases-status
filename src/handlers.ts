@@ -1,13 +1,14 @@
 // The worker's logic. `register` takes the Io so tests can replace GitHub, git, npm and the updater.
 import type { OrcaWorkerApi } from 'orca/worker'
-import { defaultBranch, gatherFacts, type Io } from './facts'
-import { parseRepo, projectDef, sameRepo, type ProjectDef } from './projects'
-import type { Overall, ProjectStatus, StatusSnapshot } from './protocol'
+import { defaultBranch, detectFlow, gatherFacts, type Io } from './facts'
+import { NO_SETTINGS, parseRepo, projectDef, sameRepo, settingsProblem, type DetectedFlow, type ProjectDef } from './projects'
+import type { Overall, ProjectSettings, ProjectStatus, StatusSnapshot } from './protocol'
 import { classify, unknownStatus, type Facts, type View } from './status'
 
 const FRESH_MS = 20_000
 const OVERALL_KEY = 'overall'
 const PROJECTS_KEY = 'projects'
+const SETTINGS_KEY = 'settings'
 
 /** One row of the host's `workspace.list`. */
 interface Workspace {
@@ -53,6 +54,8 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
   /** Remotes and default branches change rarely, so each is read once while the worker lives. */
   const remotes = new Map<string, string | null>()
   const defaults = new Map<string, string>()
+  /** The release flow GitHub showed for each repository. Only a successful look is kept. */
+  const flows = new Map<string, DetectedFlow | null>()
   /** A terminal never changes workspace, so each is looked up once. */
   const terminalPaths = new Map<string, string>()
   let focusedBefore: string | null = null
@@ -90,6 +93,19 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
       }
     }
     return path
+  }
+
+  async function flowOf(repo: string): Promise<DetectedFlow | null> {
+    const key = repo.toLowerCase()
+    if (!flows.has(key)) {
+      try {
+        flows.set(key, await detectFlow(repo, io))
+      } catch {
+        // GitHub could not be read now: show Actions only and look again next time.
+        return null
+      }
+    }
+    return flows.get(key) ?? null
   }
 
   async function detect(): Promise<Detected | string> {
@@ -132,7 +148,8 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
   }
 
   async function look(def: ProjectDef, view: View, force: boolean): Promise<ProjectStatus> {
-    const key = `${def.id.toLowerCase()}@${view.branch}`
+    // The flow and the updater change what is read, so they belong in the key.
+    const key = `${def.id.toLowerCase()}@${view.branch}@${def.kind ?? ''}@${def.updaterUrl ?? ''}`
     try {
       let hit = cache.get(key)
       if (force || !hit || Date.now() - hit.at >= FRESH_MS) {
@@ -147,6 +164,8 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
   }
 
   const savedRepos = async (): Promise<string[]> => ((await orca.storage.get(PROJECTS_KEY)) as string[] | null) ?? []
+  const savedSettings = async (): Promise<Record<string, ProjectSettings>> =>
+    ((await orca.storage.get(SETTINGS_KEY)) as Record<string, ProjectSettings> | null) ?? {}
 
   /** Notifies when a release project newly needs you or newly fails. A project seen for the first time only sets the baseline. */
   async function notifyChanges(projects: ProjectStatus[]): Promise<void> {
@@ -181,10 +200,12 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
     }
     const repos = [...(found ? [found.repo] : []), ...(await savedRepos())]
     const unique = repos.filter((repo, i) => repos.findIndex((other) => sameRepo(other, repo)) === i)
+    const settings = await savedSettings()
     const projects = await Promise.all(
       unique.map(async (repo) => {
         const owner = found && sameRepo(found.repo, repo) ? found : null
-        return look(projectDef(repo), await viewOf(repo, owner), force)
+        const def = projectDef(repo, await flowOf(repo), settings[repo.toLowerCase()] ?? NO_SETTINGS)
+        return look(def, await viewOf(repo, owner), force)
       })
     )
     snapshot = {
@@ -233,8 +254,34 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
     return { ok: true, message: `Added ${canonical}` }
   })
 
+  orca.panels.handle('project.settings', async ({ projectId, agentPrompt, updaterUrl }) => {
+    // Only a project the panel listed, so the store never collects settings for strangers.
+    const listed = snapshot?.projects.find((p) => p.id === projectId)
+    if (!listed) {
+      return { ok: false, message: 'That project is not listed' }
+    }
+    const next = { agentPrompt: agentPrompt.trim(), updaterUrl: updaterUrl.trim() }
+    const problem = settingsProblem(next)
+    if (problem) {
+      return { ok: false, message: problem }
+    }
+    const all = await savedSettings()
+    const key = listed.id.toLowerCase()
+    if (next.agentPrompt || next.updaterUrl) {
+      all[key] = next
+    } else {
+      delete all[key]
+    }
+    await orca.storage.set(SETTINGS_KEY, all)
+    await refresh(false)
+    return { ok: true, message: `Saved settings of ${listed.name}` }
+  })
+
   orca.panels.handle('project.remove', async ({ repo }) => {
     const saved = await savedRepos()
+    const all = await savedSettings()
+    delete all[repo.toLowerCase()]
+    await orca.storage.set(SETTINGS_KEY, all)
     await orca.storage.set(PROJECTS_KEY, saved.filter((other) => !sameRepo(other, repo)))
     await refresh(false)
     return { ok: true, message: `Removed ${repo}` }
@@ -243,7 +290,7 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
   orca.panels.handle('run.rerun', async ({ projectId, runId }) => {
     const project = snapshot?.projects.find((p) => p.id === projectId)
     // Only a failed run the panel listed for this project, never an id from elsewhere.
-    if (!project?.runs.find((r) => r.id === runId)?.rerunnable) {
+    if (!project?.checks.some((check) => check.runId === runId && check.rerunnable)) {
       return { ok: false, message: 'No failed run to re-run' }
     }
     try {

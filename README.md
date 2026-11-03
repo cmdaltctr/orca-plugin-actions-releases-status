@@ -1,8 +1,8 @@
 # Actions and Releases Status
 
-An Orca right-sidebar panel that shows GitHub Actions and release state for the project you are working in.
+An Orca right-sidebar panel that shows GitHub Actions checks and release state for the project you are working in.
 
-Orca's own Checks panel follows the workspace you have open. This panel also lets you look at another branch from where you are. Work in `main`, pick `v3`, and read the Actions of `v3`.
+Orca's own Checks panel follows the workspace you have open. This panel also lets you look at another branch from where you are. Work in `main`, pick `v3`, and read the checks of `v3`.
 
 ## Which projects it shows
 
@@ -13,48 +13,40 @@ Many workspaces share the name and branch `main`. The plugin asks Orca's CLI (`o
 
 ## Two tabs
 
-- **Actions** (opens first): every project with its workflows, branch picker, retry buttons, remove buttons and the **Add a project** card.
-- **Releases**: only projects with a release flow, with their stages, release state and **Ask agent**. Other projects are named in a one-line note.
+- **Actions** (opens first): every project with the checks of one branch, the branch picker, retry buttons, remove buttons and the **Add a project** card.
+- **Releases**: every project with its release stages and state, or a note on what was looked for when no release flow was found. Each card has optional **Settings**.
 
-## What each card shows
+## Actions tab
 
-- **GitHub Actions**: the latest runs of every workflow on one branch. A spinner marks a queued or running run. A failed run has a retry button that runs `gh run rerun --failed` on that run. Click a run to open it on GitHub.
+- **Checks**: the checks of the newest commit on the shown branch. They are the workflow jobs, such as `test (ubuntu-latest)`, and outside checks, such as Codecov. Failed checks come first, then running, passed and skipped. The first eight show; the rest fold into one row.
+- **Retry**: a failed check of a GitHub Actions run has a retry button. It runs `gh run rerun --failed` on that run. A check from outside GitHub Actions has no retry. Click a check to open it on GitHub.
 - **Branch picker**: lists the branches of your local checkouts of the same repository (every Orca worktree), then the default branch. The pick resets when you focus another workspace.
-- **State**: **Passing**, **Running** or **Failing**, from the newest run of each workflow on the shown branch.
+- **State**: **Passing**, **Running** or **Failing**, from those checks.
 
-## Release flows
+## Releases tab
 
-The plugin ships with no release flows. A repository with a flow shows stages in the Releases tab and gets a release badge: **Up to date**, **In progress**, **Needs you** or **Failed**. Stages always read the `main` branch, whatever branch the Actions list shows.
+The plugin looks at the repository on GitHub. It needs no setup and no list of projects.
 
-Add a flow in `src/projects.ts`, in `RELEASE_FLOWS`. The key is the lower-case `owner/name`.
-
-```ts
-export const RELEASE_FLOWS: Record<string, ReleaseFlow> = {
-  'acme/widget': {
-    name: 'Widget',
-    kind: 'release-please-npm',
-    npmPackage: 'widget',
-    releasePrBranch: 'release-please--branches--main--components--widget',
-    agentPrompt: '/release-widget'
-  }
-}
-```
-
-| `kind` | Stages shown | Extra fields |
+| Found in the repository | Flow | Stages |
 | --- | --- | --- |
-| `release-please-npm` | Release PR, Release run, npm | `npmPackage`, `releasePrBranch` |
-| `semantic-release` | Release run, GitHub release | none |
-| `semantic-release-desktop` | Release run, GitHub release, Updater | `updaterUrl` (JSON with a `version`) |
+| `release-please-config.json` or `.release-please-manifest.json`, and a public `package.json` | release-please and npm | Release PR, Release run, npm |
+| The same files, no public npm package | release-please | Release PR, Release run, GitHub release |
+| A workflow named `Release` | Release workflow | Release run, GitHub release |
+| None of these | no release flow | The card says what was looked for |
 
-The release run is the newest workflow named `Release` on `main`. A desktop flow also reads the newest run named `Finalize Desktop Release`.
+Stages read the `main` branch, whatever branch the Actions tab shows. The release run is the newest run of the `Release` workflow on `main`. The badge is **Up to date**, **In progress**, **Needs you** or **Failed**. **Needs you** means the next step is yours, for example approving a staged npm version.
 
-**Needs you** means the next step is yours, for example approving a staged npm version.
+### Settings
+
+Each card on the Releases tab has an optional **Settings** section. The values stay in the plugin's own storage on your machine.
+
+- **Agent prompt**: a slash command, on one line, that starts with `/`. **Ask agent** types it into an agent terminal you pick when a release needs you. It never merges or approves anything itself.
+- **Updater URL**: an https URL that answers JSON with a `version`. It adds an **Updater** stage for a desktop app: the newest GitHub release must carry a binary, and the endpoint must serve that version. The plugin then also reads the newest `Finalize Desktop Release` run.
 
 ## What it does
 
 - Looks again every minute while the panel tab is open, on **Refresh**, and when the focused workspace changes.
-- Sends a desktop notification when a release project newly needs you or newly fails. Other projects never notify.
-- **Ask agent** types the flow's `agentPrompt` slash command into an agent terminal you pick. It never merges or approves anything itself.
+- Sends a desktop notification when a project with a release flow newly needs you or newly fails. Other projects never notify.
 
 ## Needs
 
@@ -63,6 +55,12 @@ The release run is the newest workflow named `Release` on `main`. A desktop flow
 - The `workspace:read` capability, which Orca asks you to approve.
 - Local workspaces only. A workspace on an SSH host is not detected.
 
+## Limits
+
+- A check has no expandable steps. Click it to open the run on GitHub.
+- The checks come from the newest commit of a branch. A branch with no workflow runs shows no checks.
+- Always-visible status bar item: not included. The panel looks again only while its tab is open.
+
 ## Develop
 
 ```sh
@@ -70,10 +68,6 @@ orca plugin test .       # unit tests, no Orca window
 orca plugin check .      # renders the panel once
 orca plugin dev watch .  # loads it into Orca; prints the approval command on first load
 ```
-
-## Not included
-
-An always-visible status bar item. The panel looks again only while its tab is open.
 
 ## Licence
 
