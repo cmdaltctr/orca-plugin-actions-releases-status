@@ -251,6 +251,12 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
                     checked={project.locked}
                     onChange={(value) => void lockBranch(project.id, value)}
                   />
+                  <IconButton
+                    icon="info"
+                    label={`Lock: keep this card on ${project.branch} when you focus another project.`}
+                    tooltip={`Lock: keep this card on ${project.branch} when you focus another project.`}
+                    variant="ghost"
+                  />
                   <Button
                     variant="ghost"
                     size="xs"

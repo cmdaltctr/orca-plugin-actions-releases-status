@@ -375,6 +375,15 @@ test('the lock switch locks the branch and shows the Locked badge, and turning i
   await view.unmount()
 })
 
+test('an info icon beside the lock switch says what the lock does', async () => {
+  const view = await mount(panel, { host: host({ requests: { 'status.get': () => only(widget) } }) })
+  const info = view.findAll({ type: 'IconButton', label: /^Lock:/ })
+  assert.equal(info.length, 1)
+  assert.equal(info[0].props.icon, 'info')
+  assert.equal(info[0].props.tooltip, 'Lock: keep this card on main when you focus another project.')
+  await view.unmount()
+})
+
 test('only an added project has a remove button', async () => {
   const sent: unknown[] = []
   const view = await mount(panel, {
