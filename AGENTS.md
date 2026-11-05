@@ -59,6 +59,7 @@ The kit is fixed. Check these before you promise a look to the user.
 - One card per project, keyed by repository. Cards opened from the PRs tab are keyed by repository and branch.
 - An opened card sits under the pinned card. With no pin, it sits under its own project's card. Opened cards live in worker memory and go when Orca restarts.
 - Lock and pin are saved in plugin storage (`locks`, `pin`). One card is pinned at a time.
+- Each look first drops what a deleted worktree left behind (`dropDeletedWorktrees`): its opened card and a lock on its branch. It keeps a lock on the default branch and on a project with no local worktree. It does nothing when `workspace.list` is truncated.
 - A handler acts only on what the last snapshot listed: a project, a branch or a run id. It never acts on an id the panel did not show.
 - A failed GitHub read keeps the last answer. It does not clear the list.
 - Release stages always read `main`, whatever branch the Actions tab shows.

@@ -31,7 +31,7 @@ The plugin lists every Orca worktree of the focused project. A worktree shows wh
 
 - Click the worktree name to open its card on the Actions tab, below the other cards. The card shows the checks of that branch, with retry buttons. Its X closes it. Opened cards go when Orca restarts.
 - Click the open button to open the PR on GitHub.
-- A worktree you delete leaves the list.
+- A worktree you delete leaves the list. Its opened card closes, and a lock on its branch is released, so that card goes back to the focused branch. A lock on the default branch, or on a project with no local worktree, stays.
 
 ## Actions tab
 

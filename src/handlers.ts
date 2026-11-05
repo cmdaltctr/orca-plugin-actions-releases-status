@@ -243,7 +243,48 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
     }
   }
 
+  /** The branches of every local worktree, by lower-case repository. null when Orca listed only some workspaces. */
+  async function localBranches(): Promise<Map<string, Set<string>> | null> {
+    const { workspaces, truncated } = await orca.host.call('workspace.list')
+    if (truncated) {
+      return null
+    }
+    const byRepo = new Map<string, Set<string>>()
+    for (const w of workspaces.filter((w) => w.branch && isLocal(w))) {
+      const repo = (await remoteOf(w.path))?.toLowerCase()
+      if (repo && w.branch) {
+        byRepo.set(repo, (byRepo.get(repo) ?? new Set()).add(w.branch))
+      }
+    }
+    return byRepo
+  }
+
+  /**
+   * A deleted worktree takes its opened card and any lock on its branch with it. A lock stays on the
+   * default branch, and on a project with no local worktree at all, since neither was a worktree's.
+   */
+  async function dropDeletedWorktrees(): Promise<void> {
+    const local = await localBranches()
+    if (!local) {
+      return
+    }
+    const has = (repo: string, branch: string) => local.get(repo.toLowerCase())?.has(branch) === true
+    opened = opened.filter((card) => has(card.repo, card.branch))
+    const locks = await savedLocks()
+    const kept: Record<string, Lock> = {}
+    for (const [key, lock] of Object.entries(locks)) {
+      const gone = local.has(key) && !has(lock.repo, lock.branch) && lock.branch !== (await defaultBranchOf(lock.repo))
+      if (!gone) {
+        kept[key] = lock
+      }
+    }
+    if (Object.keys(kept).length !== Object.keys(locks).length) {
+      await orca.storage.set(LOCKS_KEY, kept)
+    }
+  }
+
   async function lookAll(force: boolean): Promise<StatusSnapshot> {
+    await dropDeletedWorktrees()
     const detected = await detect()
     const found = typeof detected === 'string' ? null : detected
     if (found) {
