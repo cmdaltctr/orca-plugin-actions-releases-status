@@ -222,6 +222,24 @@ test('only a failed check of a workflow run gets a retry button, and pressing it
   await view.unmount()
 })
 
+test('a failed check from outside GitHub Actions gets an info icon that says it cannot re-run', async () => {
+  const checks = [
+    check({ id: 1, name: 'codecov/patch', state: 'failed', runId: null }),
+    check({ id: 2, name: 'codecov/project', state: 'passed', runId: null }),
+    check({ id: 3, name: 'CI', state: 'failed', runId: 30, rerunnable: true })
+  ]
+  const view = await mount(panel, {
+    host: host({ requests: { 'status.get': () => only({ ...tool, checks }) } })
+  })
+  const info = view.findAll({ type: 'IconButton', label: /cannot re-run/ })
+  assert.equal(info.length, 1)
+  assert.equal(info[0].props.icon, 'info')
+  assert.equal(info[0].props.label, 'codecov/patch: Not a GitHub Actions job, cannot re-run.')
+  assert.equal(info[0].props.tooltip, 'Not a GitHub Actions job, cannot re-run.')
+  assert.equal(view.findAll({ type: 'IconButton', label: /Re-run/ }).length, 1)
+  await view.unmount()
+})
+
 test('checks past the first eight fold into one row', async () => {
   const many = Array.from({ length: 10 }, (_, i) => check({ id: 100 + i, name: `job ${i}` }))
   const view = await mount(panel, {

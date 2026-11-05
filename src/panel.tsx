@@ -189,9 +189,20 @@ function CheckLine({ project, check }: { project: ProjectStatus; check: CheckRow
           onPress={() => void rerun(project.id, check.runId as number)}
         />
       ) : null}
+      {(check.state === 'failed' || check.state === 'cancelled') && check.runId === null ? (
+        <IconButton
+          icon="info"
+          label={`${check.name}: ${NOT_ACTIONS}`}
+          tooltip={NOT_ACTIONS}
+          variant="ghost"
+        />
+      ) : null}
     </Row>
   )
 }
+
+/** Shown on a failed check from outside GitHub Actions, such as Codecov: `gh run rerun` has no run to retry. */
+const NOT_ACTIONS = 'Not a GitHub Actions job, cannot re-run.'
 
 /** Longest title shown on the PR line. Orca's Button does not clip text, so the cut happens here. */
 const PR_TITLE_SHOWN = 26
