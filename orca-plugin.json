@@ -1,7 +1,7 @@
 {
   "manifestVersion": 2,
   "id": "release-status",
-  "name": "Actions and Releases Status",
+  "name": "PRs, Actions and Releases Status",
   "version": "0.1.0",
   "description": "GitHub Actions and release status for the project of the focused workspace, any of its branches and any repository you add. Re-runs failed runs and asks an agent to take over.",
   "engines": {
@@ -14,7 +14,7 @@
     "panels": [
       {
         "id": "releases",
-        "title": "Actions and Releases",
+        "title": "PRs, Actions and Releases",
         "icon": "rocket",
         "entry": "src/panel.tsx",
         "ui": "components"

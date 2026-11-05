@@ -1,4 +1,4 @@
-# Actions and Releases Status
+# PRs, Actions and Releases Status
 
 An Orca right-sidebar panel that shows GitHub Actions checks and release state for the project you are working in.
 
@@ -11,10 +11,27 @@ Orca's own Checks panel follows the workspace you have open. This panel also let
 
 Many workspaces share the name and branch `main`. The plugin asks Orca's CLI (`orca terminal list`) which workspace owns the focused terminal. If the CLI is not found, it falls back to matching branch and name, and says so when that is ambiguous.
 
-## Two tabs
+## Three tabs
 
+- **PRs**: the pull requests of the focused project's local worktrees, by worktree name.
 - **Actions** (opens first): every project with the checks of one branch, the branch picker, retry buttons, remove buttons and the **Add a project** card.
 - **Releases**: every project with its release stages and state, or a note on what was looked for when no release flow was found. Each card has optional **Settings**.
+
+## PRs tab
+
+The plugin lists every Orca worktree of the focused project. A worktree shows when its branch has a pull request, open, merged or closed. The row shows a coloured dot, the worktree name and a badge in the same colour: **Running**, **Ready**, **Failed**, **Merged** or **Closed**. Hover the name to read the state, the reason and the PR title.
+
+| Dot | Meaning |
+| --- | --- |
+| orange | Checks still run, or the PR is a draft, has merge conflicts, or GitHub has not yet said if it can merge. |
+| green | Ready to merge: every check passed and the PR can merge. Reviews are not read. |
+| red | A check failed. |
+| theme colour | The PR was merged. Orca's components have no purple. |
+| grey | The PR was closed without a merge. |
+
+- Click the worktree name to open its card on the Actions tab, below the other cards. The card shows the checks of that branch, with retry buttons. Its X closes it. Opened cards go when Orca restarts.
+- Click the open button to open the PR on GitHub.
+- A worktree you delete leaves the list.
 
 ## Actions tab
 

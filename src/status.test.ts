@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { checksOf } from './facts'
 import { parseRepo, projectDef, settingsProblem, type DetectedFlow } from './projects'
-import { classify, type Check, type Facts, type Run, type View } from './status'
+import { classify, prState, type Check, type Facts, type Run, type View } from './status'
 
 const FLOWS: Record<string, [string, DetectedFlow | null, { agentPrompt: string; updaterUrl: string }]> = {
   npm: ['acme/widget', { kind: 'release-please-npm', npmPackage: 'widget-pkg' }, { agentPrompt: '/release-agent', updaterUrl: '' }],
@@ -257,4 +257,27 @@ test('the jobs of a release run that did not pass are listed, failed and cancell
 
 test('a release project with no unfinished release run lists no jobs', () => {
   assert.deepEqual(classify(def('npm'), facts(), view).releaseJobs, [])
+})
+
+test('a worktree PR is orange while checks run, red when one fails, green when it can merge', () => {
+  const open = { state: 'OPEN', isDraft: false, mergeable: 'MERGEABLE' }
+  assert.deepEqual(prState({ ...open, checks: 'pending' }), { state: 'running', reason: 'Checks running' })
+  assert.deepEqual(prState({ ...open, checks: 'failed' }), { state: 'failed', reason: 'A check failed' })
+  assert.deepEqual(prState({ ...open, checks: 'passed' }), { state: 'ready', reason: '' })
+})
+
+test('a worktree PR with passing checks is not ready while a draft, in conflict or not yet worked out', () => {
+  const passed = { state: 'OPEN', checks: 'passed' as const }
+  assert.deepEqual(prState({ ...passed, isDraft: true, mergeable: 'MERGEABLE' }), { state: 'running', reason: 'Draft' })
+  assert.deepEqual(prState({ ...passed, isDraft: false, mergeable: 'CONFLICTING' }), { state: 'running', reason: 'Merge conflicts' })
+  assert.deepEqual(prState({ ...passed, isDraft: false, mergeable: 'UNKNOWN' }), {
+    state: 'running',
+    reason: 'GitHub is still checking if it can merge'
+  })
+})
+
+test('a merged or closed worktree PR ignores its checks', () => {
+  const rest = { isDraft: false, mergeable: 'UNKNOWN', checks: 'failed' as const }
+  assert.deepEqual(prState({ ...rest, state: 'MERGED' }), { state: 'merged', reason: '' })
+  assert.deepEqual(prState({ ...rest, state: 'CLOSED' }), { state: 'closed', reason: '' })
 })

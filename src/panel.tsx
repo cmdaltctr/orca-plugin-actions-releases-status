@@ -28,7 +28,7 @@ import {
   Text,
   type PanelContext
 } from 'orca'
-import type { CheckRow, Overall, ProjectSettings, ProjectStatus, StageState, StatusSnapshot } from './protocol'
+import type { CheckRow, Overall, PrState, ProjectSettings, ProjectStatus, StageState, StatusSnapshot, WorktreePr } from './protocol'
 
 const POLL_MS = 60_000
 const REQUEST = { timeoutMs: 60_000 }
@@ -39,7 +39,8 @@ const notice = atom<string | null>(null)
 const agentOptions = atom<{ value: string; label: string }[]>([])
 const agentChoice = atom('')
 const draft = atom('')
-const view = atom<'actions' | 'releases'>('actions')
+type View = 'prs' | 'actions' | 'releases'
+const view = atom<View>('actions')
 /** Unsaved edits of the Settings fields, by project. */
 const settingsDraft = atom<Record<string, Partial<ProjectSettings>>>({})
 
@@ -74,6 +75,12 @@ async function show(task: () => Promise<StatusSnapshot>): Promise<void> {
 const load = (fresh = false) => show(() => plugin.request(fresh ? 'status.refresh' : 'status.get', undefined, REQUEST))
 const selectBranch = (projectId: string, branch: string) =>
   show(() => plugin.request('branch.select', { projectId, branch }, REQUEST))
+const openCard = async (branch: string): Promise<void> => {
+  set(view, 'actions')
+  await show(() => plugin.request('card.open', { branch }, REQUEST))
+}
+const closeCard = (projectId: string, branch: string) =>
+  show(() => plugin.request('card.close', { projectId, branch }, REQUEST))
 
 async function loadAgents(): Promise<void> {
   try {
@@ -217,14 +224,27 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
           <Row gap="xs" align="center">
             <Badge tone={TONE[project.actions.overall]}>{ACTIONS_WORDS[project.actions.overall]}</Badge>
             {project.detected ? <Badge tone="neutral">This project</Badge> : null}
-            <Badge tone={project.locked ? 'success' : 'warning'}>{project.locked ? 'Locked' : 'Unlocked'}</Badge>
-            <Switch
-              label={ZERO_WIDTH}
-              checked={project.locked}
-              onChange={(value) => void lockBranch(project.id, value)}
-            />
+            {project.opened ? (
+              <Badge tone="neutral">{project.branch}</Badge>
+            ) : (
+              <>
+                <Badge tone={project.locked ? 'success' : 'warning'}>{project.locked ? 'Locked' : 'Unlocked'}</Badge>
+                <Switch
+                  label={ZERO_WIDTH}
+                  checked={project.locked}
+                  onChange={(value) => void lockBranch(project.id, value)}
+                />
+              </>
+            )}
           </Row>
-          {project.detected ? null : (
+          {project.opened ? (
+            <IconButton
+              icon="close"
+              label={`Close ${project.name} ${project.branch}`}
+              variant="ghost"
+              onPress={() => void closeCard(project.id, project.branch)}
+            />
+          ) : project.detected ? null : (
             <IconButton
               icon="close"
               label={`Remove ${project.name}`}
@@ -233,7 +253,7 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
             />
           )}
         </Row>
-        {project.branches.length > 1 ? (
+        {project.branches.length > 1 && !project.opened ? (
           <Select
             label={`Branch of ${project.name}`}
             labelHidden
@@ -355,11 +375,14 @@ function ReleaseCard({ project }: { project: ProjectStatus }) {
   )
 }
 
-function ActionsView({ projects }: { projects: ProjectStatus[] }) {
+function ActionsView({ projects, opened }: { projects: ProjectStatus[]; opened: ProjectStatus[] }) {
   return (
     <Stack gap="md">
       {projects.map((project) => (
         <ActionsCard key={project.id} project={project} />
+      ))}
+      {opened.map((project) => (
+        <ActionsCard key={`${project.id}@${project.branch}`} project={project} />
       ))}
       <Card title="Add a project" description="Any GitHub repository that gh can read.">
         <Row gap="xs" align="end">
@@ -376,6 +399,62 @@ function ActionsView({ projects }: { projects: ProjectStatus[] }) {
           </Button>
         </Row>
       </Card>
+    </Stack>
+  )
+}
+
+/** Orca's kit has five tones and no purple: merged takes `accent`, the theme colour; closed is muted grey. */
+const PR_DOT: Record<PrState, ['warning' | 'success' | 'danger' | 'accent' | undefined, string]> = {
+  running: ['warning', 'Running'],
+  ready: ['success', 'Ready to merge'],
+  failed: ['danger', 'Failing'],
+  merged: ['accent', 'Merged'],
+  closed: [undefined, 'Closed']
+}
+/** The badge beside the dot: same colour, one short word. */
+const PR_BADGE_WORD: Record<PrState, string> = {
+  running: 'Running',
+  ready: 'Ready',
+  failed: 'Failed',
+  merged: 'Merged',
+  closed: 'Closed'
+}
+
+/** One worktree with a PR: a coloured dot, the name that opens its card on the Actions tab, and the PR link. */
+function PrLine({ pr }: { pr: WorktreePr }) {
+  const [tone, word] = PR_DOT[pr.state]
+  const state = pr.reason ? `${word}: ${pr.reason}` : word
+  return (
+    <Row gap="xs" align="center" justify="between">
+      <Row gap="xs" align="center">
+        {tone ? <Text tone={tone}>●</Text> : <Text muted>●</Text>}
+        <Button variant="ghost" size="xs" tooltip={`${state}. #${pr.number} ${pr.title}`} onPress={() => void openCard(pr.branch)}>
+          {pr.worktree}
+        </Button>
+      </Row>
+      <Row gap="xs" align="center">
+        <Badge tone={tone ?? 'neutral'}>{PR_BADGE_WORD[pr.state]}</Badge>
+        <IconButton icon="open-external" label={`Open PR #${pr.number}`} variant="ghost" onPress={() => void shell.openExternal(pr.url)} />
+      </Row>
+    </Row>
+  )
+}
+
+function PrsView({ prs }: { prs: WorktreePr[] }) {
+  if (prs.length === 0) {
+    return (
+      <EmptyState
+        icon="branch"
+        title="No pull requests"
+        description="None of this project's worktrees has a pull request."
+      />
+    )
+  }
+  return (
+    <Stack gap="xs">
+      {prs.map((pr) => (
+        <PrLine key={pr.branch} pr={pr} />
+      ))}
     </Stack>
   )
 }
@@ -414,7 +493,7 @@ export default function Panel() {
   return (
     <Stack gap="md">
       <Row justify="between">
-        <Heading>Actions and Releases</Heading>
+        <Heading>PRs, Actions and Releases</Heading>
         <Button variant="ghost" icon="refresh" onPress={() => void load(true)}>
           Refresh
         </Button>
@@ -423,9 +502,12 @@ export default function Panel() {
       {read(notice) ? <Text muted>{read(notice)}</Text> : null}
       {current?.detectNote ? <Text muted>{`No project detected: ${current.detectNote}`}</Text> : null}
       {current ? (
-        <Tabs label="View" value={read(view)} onChange={(value) => set(view, value as 'actions' | 'releases')}>
+        <Tabs label="View" value={read(view)} onChange={(value) => set(view, value as View)}>
+          <Tab value="prs" label="PRs" icon="branch">
+            <PrsView prs={current.worktreePrs} />
+          </Tab>
           <Tab value="actions" label="Actions" icon="play">
-            <ActionsView projects={current.projects} />
+            <ActionsView projects={current.projects} opened={current.opened} />
           </Tab>
           <Tab value="releases" label="Releases" icon="rocket">
             <ReleasesView projects={current.projects} />

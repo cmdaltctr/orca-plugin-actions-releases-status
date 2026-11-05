@@ -30,6 +30,23 @@ export interface BranchPr {
   title: string
   state: 'open' | 'merged' | 'closed'
 }
+/**
+ * Where a worktree's pull request stands. `running`: checks still run, or it is a draft, has
+ * conflicts, or GitHub has not said yet whether it can merge. `ready`: checks passed and it can merge.
+ */
+export type PrState = 'running' | 'ready' | 'failed' | 'merged' | 'closed'
+/** The newest pull request of one local worktree of the focused project. */
+export interface WorktreePr {
+  /** The worktree's name in Orca. */
+  worktree: string
+  branch: string
+  number: number
+  url: string
+  title: string
+  state: PrState
+  /** Why an open PR is not ready, in a few words; empty otherwise. */
+  reason: string
+}
 /** What the user can set per project. Empty strings mean not set. */
 /** The jobs of one release run that did not pass, so the reader can see what failed and retry it. */
 export interface RunJobs {
@@ -55,6 +72,8 @@ export interface ProjectStatus {
   detected: boolean
   /** true when the branch is locked: the card stays on it when focus moves to another project. */
   locked: boolean
+  /** true for a card opened from the PRs tab: one fixed branch, closed by the user. */
+  opened: boolean
   /** `release` projects have a release flow and stages. `actions` projects show GitHub Actions only. */
   flow: 'release' | 'actions'
   /** The headline state: the release state for a `release` project, the Actions state otherwise. */
@@ -84,6 +103,10 @@ export interface ProjectStatus {
 
 export interface StatusSnapshot {
   projects: ProjectStatus[]
+  /** Cards opened from the PRs tab, oldest first. They last until closed or until Orca restarts. */
+  opened: ProjectStatus[]
+  /** The pull requests of the focused project's local worktrees. Worktrees with no PR are left out. */
+  worktreePrs: WorktreePr[]
   /** Why no project was detected from the focused workspace. Unset when one was. */
   detectNote?: string
   /** When GitHub was last asked. */
@@ -101,6 +124,10 @@ declare module 'orca' {
     'branch.select': { input: { projectId: string; branch: string }; output: StatusSnapshot }
     /** Locks the branch now shown for a project, or unlocks it. A locked card stays on its branch and stays listed. */
     'branch.lock': { input: { projectId: string; locked: boolean }; output: StatusSnapshot }
+    /** Opens a card on the Actions tab for the branch of a worktree the PRs tab listed. */
+    'card.open': { input: { branch: string }; output: StatusSnapshot }
+    /** Closes a card opened from the PRs tab. */
+    'card.close': { input: { projectId: string; branch: string }; output: StatusSnapshot }
     /** Adds a repository (`owner/name` or a GitHub URL) after checking that `gh` can read it. */
     'project.add': { input: { repo: string }; output: { ok: boolean; message: string } }
     /** Saves the agent prompt and updater URL of one project the panel listed. Empty clears one. */

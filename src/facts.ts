@@ -3,7 +3,7 @@
 import { execFile } from 'node:child_process'
 import { parseRepo, RELEASE_BRANCH, type DetectedFlow, type ProjectDef } from './projects'
 import type { BranchPr } from './protocol'
-import type { Check, Facts, ReleasePr, Run } from './status'
+import type { Check, Facts, PrFacts, ReleasePr, Run } from './status'
 
 export interface Io {
   ghJson(args: string[]): Promise<unknown>
@@ -150,6 +150,29 @@ async function branchPrOf(repo: string, branch: string, io: Io): Promise<BranchP
   } catch {
     return null
   }
+}
+
+interface RawWorktreePr extends RawBranchPr {
+  isDraft: boolean
+  mergeable: string
+  statusCheckRollup: RawCheck[]
+}
+
+/** The newest pull request from `branch`, with what the PRs tab colours it by. null when it has none. Throws when GitHub cannot be read. */
+export async function worktreePrOf(
+  repo: string,
+  branch: string,
+  io: Io
+): Promise<(Omit<RawBranchPr, 'state'> & PrFacts) | null> {
+  const [pr] = (await io.ghJson([
+    'pr', 'list', '-R', repo, '--head', branch, '--state', 'all', '--limit', '1',
+    '--json', 'number,url,title,state,isDraft,mergeable,statusCheckRollup'
+  ])) as RawWorktreePr[]
+  if (!pr) {
+    return null
+  }
+  const { statusCheckRollup, ...rest } = pr
+  return { ...rest, checks: checksOf(statusCheckRollup ?? []) }
 }
 
 async function newestRelease(def: ProjectDef, io: Io): Promise<Facts['release']> {

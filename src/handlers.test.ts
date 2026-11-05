@@ -136,7 +136,9 @@ function fakeIo(world: Partial<World> = {}, calls: string[][] = [], terminalLook
       if (args[0] === 'pr') {
         // `--head` asks for the pull request of one branch; the release PR lookup has no `--head`.
         const head = args.includes('--head') ? args[args.indexOf('--head') + 1] : null
-        return head === 'v3' ? [{ number: 7, url: 'https://github.com/x/widget/pull/7', title: 'feat: v3', state: 'MERGED' }] : []
+        return head === 'v3'
+          ? [{ number: 7, url: 'https://github.com/x/widget/pull/7', title: 'feat: v3', state: 'MERGED', isDraft: false, mergeable: 'UNKNOWN', statusCheckRollup: [] }]
+          : []
       }
       return [{ tagName: w.tag }]
     },
@@ -238,9 +240,64 @@ test('the pull request of the shown branch follows the branch picker', async () 
 test('a failed pull request lookup shows no pull request and keeps the checks', async () => {
   const io = fakeIo()
   const worker = await mount({ ...io, ghJson: async (args) => (args.includes('--head') ? Promise.reject(new Error('boom')) : io.ghJson(args)) })
-  const project = (await worker.request('status.get')).projects[0]
-  assert.equal(project?.branchPr, null)
-  assert.ok((project?.checks.length ?? 0) > 0)
+  const snapshot = await worker.request('status.get')
+  assert.equal(snapshot.projects[0]?.branchPr, null)
+  assert.ok((snapshot.projects[0]?.checks.length ?? 0) > 0)
+  assert.deepEqual(snapshot.worktreePrs, [])
+  await worker.deactivate()
+})
+
+test('the PRs tab lists the worktrees of the focused project that have a PR, by worktree name', async () => {
+  const worker = await mount(fakeIo())
+  const snapshot = await worker.request('status.get')
+  // `widget` on main has no PR; `other` belongs to another repository.
+  assert.deepEqual(snapshot.worktreePrs, [
+    { worktree: 'widget-v3', branch: 'v3', number: 7, url: 'https://github.com/x/widget/pull/7', title: 'feat: v3', state: 'merged', reason: '' }
+  ])
+  await worker.deactivate()
+})
+
+test('a worktree PR read once is kept when GitHub stops answering', async () => {
+  let down = false
+  const io = fakeIo()
+  const worker = await mount({ ...io, ghJson: async (args) => (down && args.includes('--head') ? Promise.reject(new Error('boom')) : io.ghJson(args)) })
+  await worker.request('status.get')
+  down = true
+  assert.deepEqual((await worker.request('status.refresh')).worktreePrs.map((pr) => pr.number), [7])
+  await worker.deactivate()
+})
+
+test('card.open adds a card for a listed worktree branch, once, and card.close removes it', async () => {
+  const worker = await mount(fakeIo())
+  await worker.request('status.get')
+  const opened = (await worker.request('card.open', { branch: 'v3' })).opened
+  assert.deepEqual(opened.map((p) => [p.id, p.branch, p.opened, p.locked, p.detected]), [[WIDGET, 'v3', true, false, false]])
+  assert.deepEqual(opened[0]?.checks.map((c) => c.id), [4, 5])
+  assert.equal((await worker.request('card.open', { branch: 'v3' })).opened.length, 1)
+  assert.deepEqual((await worker.request('card.close', { projectId: WIDGET, branch: 'v3' })).opened, [])
+  await worker.deactivate()
+})
+
+test('card.open refuses a branch the PRs tab did not list', async () => {
+  const worker = await mount(fakeIo())
+  await worker.request('status.get')
+  assert.deepEqual((await worker.request('card.open', { branch: 'main' })).opened, [])
+  assert.deepEqual((await worker.request('card.open', { branch: 'nope' })).opened, [])
+  await worker.deactivate()
+})
+
+test('an opened card keeps showing after focus moves to another project, and its failed run can be re-run', async () => {
+  const focus = { id: 'w1' as string | null }
+  const calls: string[][] = []
+  const worker = await mount(fakeIo({}, calls), hostFor(focus))
+  await worker.request('status.get')
+  await worker.request('card.open', { branch: 'v3' })
+  focus.id = 'w3'
+  const snapshot = await worker.request('status.get')
+  assert.deepEqual(snapshot.opened.map((p) => p.branch), ['v3'])
+  assert.deepEqual(snapshot.worktreePrs, [])
+  assert.equal((await worker.request('run.rerun', { projectId: WIDGET, runId: 72 })).ok, true)
+  assert.ok(calls.some((args) => args.join(' ') === `run rerun 72 -R ${WIDGET} --failed`))
   await worker.deactivate()
 })
 

@@ -1,9 +1,9 @@
 // The worker's logic. `register` takes the Io so tests can replace GitHub, git, npm and the updater.
 import type { OrcaWorkerApi } from 'orca/worker'
-import { defaultBranch, detectFlow, gatherFacts, type Io } from './facts'
+import { defaultBranch, detectFlow, gatherFacts, worktreePrOf, type Io } from './facts'
 import { NO_SETTINGS, parseRepo, projectDef, sameRepo, settingsProblem, type DetectedFlow, type ProjectDef } from './projects'
-import type { Overall, ProjectSettings, ProjectStatus, StatusSnapshot } from './protocol'
-import { classify, unknownStatus, type Facts, type View } from './status'
+import type { Overall, ProjectSettings, ProjectStatus, StatusSnapshot, WorktreePr } from './protocol'
+import { classify, prState, unknownStatus, type Facts, type View } from './status'
 
 const FRESH_MS = 20_000
 const OVERALL_KEY = 'overall'
@@ -33,6 +33,8 @@ interface Detected {
   repo: string
   focusedBranch: string | null
   branches: string[]
+  /** Every local worktree of the repository that is on a branch, the focused one first. */
+  worktrees: { name: string; branch: string }[]
 }
 
 /** Orca names the machine it runs on `local`; SSH and paired hosts have other ids. */
@@ -65,6 +67,11 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
   const flows = new Map<string, DetectedFlow | null>()
   /** A terminal never changes workspace, so each is looked up once. */
   const terminalPaths = new Map<string, string>()
+  const prCache = new Map<string, { at: number; pr: Awaited<ReturnType<typeof worktreePrOf>> }>()
+  /** Cards opened from the PRs tab. Kept in memory only, so they go when Orca restarts. */
+  let opened: Lock[] = []
+  /** The repository the PRs tab listed last, so `card.open` only opens its branches. */
+  let prRepo: string | null = null
   let focusedBefore: string | null = null
   let lastAskedAt = Date.now()
   let chain: Promise<unknown> = Promise.resolve()
@@ -139,11 +146,17 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
         .filter((w) => w.id !== focused.id && w.branch && isLocal(w))
         .map(async (w) => {
           const other = await remoteOf(w.path)
-          return other && sameRepo(other, repo) ? w.branch : null
+          return other && sameRepo(other, repo) ? w : null
         })
     )
-    const branches = [focused.branch, ...others].filter((b): b is string => Boolean(b))
-    return { workspaceId: focused.id, repo, focusedBranch: focused.branch, branches: [...new Set(branches)] }
+    const worktrees = [focused, ...others].flatMap((w) => (w?.branch ? [{ name: w.name, branch: w.branch }] : []))
+    return {
+      workspaceId: focused.id,
+      repo,
+      focusedBranch: focused.branch,
+      branches: [...new Set(worktrees.map((w) => w.branch))],
+      worktrees
+    }
   }
 
   async function viewOf(repo: string, detected: Detected | null, lock: Lock | undefined): Promise<View> {
@@ -174,6 +187,30 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
     } catch (error) {
       return unknownStatus(def, error, view)
     }
+  }
+
+  /** The newest PR of each worktree branch, by `repo@branch`. A failed read keeps the last answer. */
+  async function worktreePrs(found: Detected | null, force: boolean): Promise<WorktreePr[]> {
+    if (!found) {
+      return []
+    }
+    const rows = await Promise.all(
+      found.worktrees.map(async ({ name, branch }) => {
+        const key = `${found.repo.toLowerCase()}@${branch}`
+        let hit = prCache.get(key)
+        if (force || !hit || Date.now() - hit.at >= FRESH_MS) {
+          try {
+            hit = { at: Date.now(), pr: await worktreePrOf(found.repo, branch, io) }
+            prCache.set(key, hit)
+          } catch {
+            // GitHub could not be read now: show what it said last time.
+          }
+        }
+        const pr = hit?.pr
+        return pr ? { worktree: name, branch, number: pr.number, url: pr.url, title: pr.title, ...prState(pr) } : null
+      })
+    )
+    return rows.filter((row): row is WorktreePr => row !== null)
   }
 
   const savedRepos = async (): Promise<string[]> => ((await orca.storage.get(PROJECTS_KEY)) as string[] | null) ?? []
@@ -225,8 +262,20 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
         return look(def, await viewOf(repo, owner, locks[repo.toLowerCase()]), force)
       })
     )
+    // An opened card shows Actions only, so it skips the release flow and its lookups.
+    const [openedCards, prs] = await Promise.all([
+      Promise.all(
+        opened.map((card) =>
+          look(projectDef(card.repo, null), { branch: card.branch, branches: [card.branch], detected: false, locked: false, opened: true }, force)
+        )
+      ),
+      worktreePrs(found, force)
+    ])
+    prRepo = found?.repo ?? null
     snapshot = {
       projects,
+      opened: openedCards,
+      worktreePrs: prs,
       ...(typeof detected === 'string' ? { detectNote: detected } : {}),
       checkedAt: lastAskedAt
     }
@@ -265,6 +314,21 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
       const { [listed.id.toLowerCase()]: _old, ...rest } = await savedLocks()
       await orca.storage.set(LOCKS_KEY, locked ? { ...rest, [listed.id.toLowerCase()]: { repo: listed.id, branch: listed.branch } } : rest)
     }
+    return refresh(false)
+  })
+
+  orca.panels.handle('card.open', ({ branch }) => {
+    // Only a worktree branch the PRs tab listed, and never twice.
+    const listed = prRepo !== null && snapshot?.worktreePrs.some((pr) => pr.branch === branch)
+    const repo = prRepo
+    if (listed && repo && !opened.some((card) => sameRepo(card.repo, repo) && card.branch === branch)) {
+      opened = [...opened, { repo, branch }]
+    }
+    return refresh(false)
+  })
+
+  orca.panels.handle('card.close', ({ projectId, branch }) => {
+    opened = opened.filter((card) => !(sameRepo(card.repo, projectId) && card.branch === branch))
     return refresh(false)
   })
 
@@ -324,14 +388,14 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
   })
 
   orca.panels.handle('run.rerun', async ({ projectId, runId }) => {
-    const project = snapshot?.projects.find((p) => p.id === projectId)
-    // Only a failed run the panel listed for this project, never an id from elsewhere.
-    const rerunnable = [...project?.checks ?? [], ...(project?.releaseJobs.flatMap((group) => group.jobs) ?? [])]
+    // Only a failed run the panel listed for this project, on any of its cards, never an id from elsewhere.
+    const cards = [...(snapshot?.projects ?? []), ...(snapshot?.opened ?? [])].filter((p) => p.id === projectId)
+    const rerunnable = cards.flatMap((card) => [...card.checks, ...card.releaseJobs.flatMap((group) => group.jobs)])
     if (!rerunnable.some((check) => check.runId === runId && check.rerunnable)) {
       return { ok: false, message: 'No failed run to re-run' }
     }
     try {
-      await io.ghText(['run', 'rerun', String(runId), '-R', project.id, '--failed'])
+      await io.ghText(['run', 'rerun', String(runId), '-R', projectId, '--failed'])
     } catch (error) {
       return { ok: false, message: message(error) }
     }

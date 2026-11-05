@@ -1,6 +1,6 @@
 import { assert, mockHost, mount, test } from 'orca/testing'
 import * as panel from './panel'
-import type { CheckRow, ProjectStatus, StatusSnapshot } from './protocol'
+import type { CheckRow, ProjectStatus, StatusSnapshot, WorktreePr } from './protocol'
 
 const NO_FLOW = 'No release flow found. Looked for release-please files and a workflow named Release.'
 
@@ -19,6 +19,7 @@ const widget: ProjectStatus = {
   name: 'Widget',
   detected: true,
   locked: false,
+  opened: false,
   flow: 'release',
   flowNote: 'release-please, npm package widget-pkg',
   settings: { agentPrompt: '/release-agent', updaterUrl: '' },
@@ -39,6 +40,7 @@ const tool: ProjectStatus = {
   name: 'Tool',
   detected: false,
   locked: false,
+  opened: false,
   flow: 'actions',
   flowNote: NO_FLOW,
   settings: { agentPrompt: '', updaterUrl: '' },
@@ -56,7 +58,15 @@ const tool: ProjectStatus = {
   ]
 }
 
-const snapshot: StatusSnapshot = { checkedAt: Date.UTC(2026, 10, 3, 9, 0), projects: [widget, tool] }
+const prs: WorktreePr[] = [
+  { worktree: 'widget-chat', branch: 'fix/chat', number: 50, url: 'https://github.com/Acme/Widget/pull/50', title: 'fix: chat', state: 'running', reason: 'Checks running' },
+  { worktree: 'widget-ocr', branch: 'fix/ocr', number: 51, url: 'https://github.com/Acme/Widget/pull/51', title: 'fix: ocr', state: 'ready', reason: '' },
+  { worktree: 'widget-lint', branch: 'fix/lint', number: 52, url: 'https://github.com/Acme/Widget/pull/52', title: 'fix: lint', state: 'failed', reason: 'A check failed' },
+  { worktree: 'widget-v3', branch: 'v3', number: 7, url: 'https://github.com/Acme/Widget/pull/7', title: 'feat: v3', state: 'merged', reason: '' },
+  { worktree: 'widget-old', branch: 'old', number: 3, url: 'https://github.com/Acme/Widget/pull/3', title: 'chore: old', state: 'closed', reason: '' }
+]
+
+const snapshot: StatusSnapshot = { checkedAt: Date.UTC(2026, 10, 3, 9, 0), projects: [widget, tool], opened: [], worktreePrs: prs }
 
 const host = (requests: Parameters<typeof mockHost>[0] = {}) =>
   mockHost({
@@ -71,6 +81,8 @@ const host = (requests: Parameters<typeof mockHost>[0] = {}) =>
       'status.refresh': () => snapshot,
       'branch.select': () => snapshot,
       'branch.lock': () => snapshot,
+      'card.open': () => snapshot,
+      'card.close': () => snapshot,
       'project.add': () => ({ ok: true, message: 'Added Acme/Tool' }),
       'project.remove': () => ({ ok: true, message: 'Removed Acme/Tool' }),
       'project.settings': () => ({ ok: true, message: 'Saved settings of Widget' }),
@@ -425,5 +437,84 @@ test('looks again when the focused workspace changes', async () => {
   const first = looks
   await view.emit('workspace.changed', { context: { branch: 'v3', displayName: 'widget-v3', terminals: [] } })
   assert.equal(looks, first + 1)
+  await view.unmount()
+})
+
+test('the PRs tab comes before Actions, and Actions still opens first', async () => {
+  const view = await mount(panel, { host: host() })
+  assert.deepEqual(view.findAll({ role: 'tab' }).map((tab) => tab.text), ['PRs', 'Actions', 'Releases'])
+  assert.ok(view.find({ text: 'Checks on main' }))
+  await view.unmount()
+})
+
+test('the PRs tab lists each worktree by name with its state, never the branch', async () => {
+  const view = await mount(panel, { host: host() })
+  await view.select({ label: 'View' }, 'prs')
+  for (const worktree of ['widget-chat', 'widget-ocr', 'widget-lint', 'widget-v3', 'widget-old']) {
+    assert.ok(view.find({ type: 'Button', text: worktree }), worktree)
+  }
+  // One coloured dot per row, in the order of the rows: orange, green, red, theme colour, grey.
+  const dots = view.findAll({ type: 'Text', text: '●' })
+  assert.deepEqual(dots.map((dot) => dot.props.tone ?? (dot.props.muted ? 'muted' : null)), ['warning', 'success', 'danger', 'accent', 'muted'])
+  // A badge per row in the dot's colour; closed is grey.
+  const badges = view.findAll({ type: 'Badge', text: /^(Running|Ready|Failed|Merged|Closed)$/ })
+  assert.deepEqual(
+    badges.map((badge) => [badge.text, badge.props.tone]),
+    [['Running', 'warning'], ['Ready', 'success'], ['Failed', 'danger'], ['Merged', 'accent'], ['Closed', 'neutral']]
+  )
+  assert.equal(view.find({ type: 'Button', text: 'widget-chat' })?.props.tooltip, 'Running: Checks running. #50 fix: chat')
+  assert.equal(view.find({ text: /fix\/chat/ }), null)
+  assert.equal(view.find({ text: 'Checks on main' }), null)
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('pressing a worktree opens its card and switches to the Actions tab', async () => {
+  const sent: unknown[] = []
+  const openedCard: ProjectStatus = { ...widget, detected: false, opened: true, branch: 'fix/chat', branches: ['fix/chat'] }
+  const view = await mount(panel, {
+    host: host({
+      requests: {
+        'card.open': (input: unknown) => {
+          sent.push(input)
+          return { ...snapshot, opened: [openedCard] }
+        }
+      }
+    })
+  })
+  await view.select({ label: 'View' }, 'prs')
+  await view.press({ type: 'Button', text: 'widget-chat' })
+  assert.deepEqual(sent, [{ branch: 'fix/chat' }])
+  assert.ok(view.find({ text: 'Checks on fix/chat' }))
+  await view.unmount()
+})
+
+test('an opened card has a close button and no lock switch or branch picker', async () => {
+  const sent: unknown[] = []
+  const openedCard: ProjectStatus = { ...widget, detected: false, opened: true, branch: 'fix/chat', branches: ['fix/chat'] }
+  const view = await mount(panel, {
+    host: host({
+      requests: {
+        'status.get': () => ({ ...snapshot, projects: [], opened: [openedCard] }),
+        'card.close': (input: unknown) => {
+          sent.push(input)
+          return { ...snapshot, projects: [], opened: [] }
+        }
+      }
+    })
+  })
+  assert.ok(view.find({ type: 'Badge', text: 'fix/chat' }))
+  assert.equal(view.find({ role: 'switch' }), null)
+  assert.equal(view.find({ type: 'Select', label: /Branch of/ }), null)
+  await view.press({ label: 'Close Widget fix/chat' })
+  assert.deepEqual(sent, [{ projectId: 'acme/widget', branch: 'fix/chat' }])
+  assert.equal(view.find({ text: 'Checks on fix/chat' }), null)
+  await view.unmount()
+})
+
+test('the PRs tab says why it is empty', async () => {
+  const view = await mount(panel, { host: host({ requests: { 'status.get': () => ({ ...snapshot, worktreePrs: [] }) } }) })
+  await view.select({ label: 'View' }, 'prs')
+  assert.ok(view.find({ type: 'EmptyState', label: 'No pull requests' }))
   await view.unmount()
 })

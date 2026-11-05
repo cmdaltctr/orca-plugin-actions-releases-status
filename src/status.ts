@@ -1,6 +1,6 @@
 // Pure: turns what GitHub, npm and the updater said into stages and one overall state.
 import type { ProjectDef } from './projects'
-import type { BranchPr, CheckRow, Overall, ProjectStatus, RunJobs, RunState, Stage, StageState } from './protocol'
+import type { BranchPr, CheckRow, Overall, PrState, ProjectStatus, RunJobs, RunState, Stage, StageState } from './protocol'
 
 export interface Run {
   id: number
@@ -227,6 +227,41 @@ export interface View {
   detected: boolean
   /** The user locked this branch, so it stays when focus moves to another project. */
   locked: boolean
+  /** A card opened from the PRs tab. */
+  opened?: boolean
+}
+
+/** What GitHub says about a worktree's pull request, with its checks already summed up by `checksOf`. */
+export interface PrFacts {
+  /** `OPEN`, `MERGED` or `CLOSED`. */
+  state: string
+  isDraft: boolean
+  /** `MERGEABLE`, `CONFLICTING` or `UNKNOWN`. */
+  mergeable: string
+  checks: ReleasePr['checks']
+}
+
+/** The colour rule of the PRs tab. Reviews are not read. */
+export function prState(pr: PrFacts): { state: PrState; reason: string } {
+  const state = pr.state.toUpperCase()
+  if (state === 'MERGED' || state === 'CLOSED') {
+    return { state: state === 'MERGED' ? 'merged' : 'closed', reason: '' }
+  }
+  if (pr.checks === 'failed') {
+    return { state: 'failed', reason: 'A check failed' }
+  }
+  if (pr.checks === 'pending') {
+    return { state: 'running', reason: 'Checks running' }
+  }
+  if (pr.isDraft) {
+    return { state: 'running', reason: 'Draft' }
+  }
+  if (pr.mergeable === 'CONFLICTING') {
+    return { state: 'running', reason: 'Merge conflicts' }
+  }
+  return pr.mergeable === 'MERGEABLE'
+    ? { state: 'ready', reason: '' }
+    : { state: 'running', reason: 'GitHub is still checking if it can merge' }
 }
 
 export function classify(def: ProjectDef, f: Facts, view: View): ProjectStatus {
@@ -252,6 +287,7 @@ export function classify(def: ProjectDef, f: Facts, view: View): ProjectStatus {
     name: def.name,
     detected: view.detected,
     locked: view.locked,
+    opened: view.opened === true,
     flow: def.kind ? 'release' : 'actions',
     flowNote: flowNote(def),
     settings: def.settings,
@@ -274,6 +310,7 @@ export function unknownStatus(def: ProjectDef, error: unknown, view: View): Proj
     name: def.name,
     detected: view.detected,
     locked: view.locked,
+    opened: view.opened === true,
     flow: def.kind ? 'release' : 'actions',
     flowNote: flowNote(def),
     settings: def.settings,
