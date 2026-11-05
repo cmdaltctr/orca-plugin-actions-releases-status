@@ -74,6 +74,8 @@ export interface ProjectStatus {
   locked: boolean
   /** true for a card opened from the PRs tab: one fixed branch, closed by the user. */
   opened: boolean
+  /** true for the one pinned card: cards opened from the PRs tab sit under it. */
+  pinned?: boolean
   /** `release` projects have a release flow and stages. `actions` projects show GitHub Actions only. */
   flow: 'release' | 'actions'
   /** The headline state: the release state for a `release` project, the Actions state otherwise. */
@@ -126,6 +128,8 @@ declare module 'orca' {
     'branch.lock': { input: { projectId: string; locked: boolean }; output: StatusSnapshot }
     /** Opens a card on the Actions tab for the branch of a worktree the PRs tab listed. */
     'card.open': { input: { branch: string }; output: StatusSnapshot }
+    /** Pins one listed project card, or unpins it. Pinning another card moves the pin. */
+    'card.pin': { input: { projectId: string; pinned: boolean }; output: StatusSnapshot }
     /** Closes a card opened from the PRs tab. */
     'card.close': { input: { projectId: string; branch: string }; output: StatusSnapshot }
     /** Adds a repository (`owner/name` or a GitHub URL) after checking that `gh` can read it. */

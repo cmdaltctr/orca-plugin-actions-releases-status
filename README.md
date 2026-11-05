@@ -26,7 +26,7 @@ The plugin lists every Orca worktree of the focused project. A worktree shows wh
 | orange | Checks still run, or the PR is a draft, has merge conflicts, or GitHub has not yet said if it can merge. |
 | green | Ready to merge: every check passed and the PR can merge. Reviews are not read. |
 | red | A check failed. |
-| theme colour | The PR was merged. Orca's components have no purple. |
+| 🟣 purple | The PR was merged. Orca's components have no purple tone, so a purple emoji carries the colour. |
 | grey | The PR was closed without a merge. |
 
 - Click the worktree name to open its card on the Actions tab, below the other cards. The card shows the checks of that branch, with retry buttons. Its X closes it. Opened cards go when Orca restarts.
@@ -40,6 +40,7 @@ The plugin lists every Orca worktree of the focused project. A worktree shows wh
 - **Retry**: a failed or cancelled check of a GitHub Actions run has a retry button. It runs `gh run rerun --failed` on that run. A check from outside GitHub Actions has no retry. Click a check to open it on GitHub.
 - **Branch picker**: lists the branches of your local checkouts of the same repository (every Orca worktree), then the default branch. The pick resets when you focus another workspace.
 - **Lock branch**: each card has a switch. Turn it on and the card keeps its project and branch when you focus a workspace of another project, and it stays listed. The badge reads **Locked** or **Unlocked**. Picking another branch while locked moves the lock to it. Turn the switch off to follow the focused workspace again. A card that was listed only because of its lock then disappears. The lock is stored on your machine and survives a restart.
+- **Pin**: each card has a pin button. It shows **📌** when the card is not pinned and **🎯 Pinned** when it is. One card is pinned at a time; pinning another card moves the pin. Cards opened from the PRs tab sit under the pinned card. With no pin, they sit under the card of their own project. The pin is stored on your machine and survives a restart.
 - **State**: **Passing**, **Running** or **Failing**, from those checks.
 
 ## Releases tab

@@ -1,6 +1,6 @@
 import { assert, mockHost, mount, test } from 'orca/testing'
-import * as panel from './panel'
-import type { CheckRow, ProjectStatus, StatusSnapshot, WorktreePr } from './protocol'
+import * as panel from '../panel'
+import type { CheckRow, ProjectStatus, StatusSnapshot, WorktreePr } from '../protocol'
 
 const NO_FLOW = 'No release flow found. Looked for release-please files and a workflow named Release.'
 
@@ -83,6 +83,7 @@ const host = (requests: Parameters<typeof mockHost>[0] = {}) =>
       'branch.lock': () => snapshot,
       'card.open': () => snapshot,
       'card.close': () => snapshot,
+      'card.pin': () => snapshot,
       'project.add': () => ({ ok: true, message: 'Added Acme/Tool' }),
       'project.remove': () => ({ ok: true, message: 'Removed Acme/Tool' }),
       'project.settings': () => ({ ok: true, message: 'Saved settings of Widget' }),
@@ -244,6 +245,7 @@ test('a long PR title is cut with three dots and the full title is the hover tex
   const long = { ...widget, branchPr: { number: 237, url: 'https://github.com/Acme/Widget/pull/237', title, state: 'merged' as const } }
   const view = await mount(panel, { host: host({ requests: { 'status.get': () => only(long) } }) })
   assert.ok(view.find({ type: 'Button', text: 'PR #237: fix(web): say when memory...' }))
+  assert.equal(view.find({ type: 'Badge', text: '🟣 merged' })?.props.tone, 'neutral')
   assert.ok(JSON.stringify(view.tree()).includes(`#237 ${title}`))
   assert.equal(view.find({ text: new RegExp(title) }), null)
   await view.unmount()
@@ -453,14 +455,17 @@ test('the PRs tab lists each worktree by name with its state, never the branch',
   for (const worktree of ['widget-chat', 'widget-ocr', 'widget-lint', 'widget-v3', 'widget-old']) {
     assert.ok(view.find({ type: 'Button', text: worktree }), worktree)
   }
-  // One coloured dot per row, in the order of the rows: orange, green, red, theme colour, grey.
-  const dots = view.findAll({ type: 'Text', text: '●' })
-  assert.deepEqual(dots.map((dot) => dot.props.tone ?? (dot.props.muted ? 'muted' : null)), ['warning', 'success', 'danger', 'accent', 'muted'])
-  // A badge per row in the dot's colour; closed is grey.
-  const badges = view.findAll({ type: 'Badge', text: /^(Running|Ready|Failed|Merged|Closed)$/ })
+  // One dot per row, in the order of the rows: orange, green, red, purple emoji, grey.
+  const dots = view.findAll({ type: 'Text', text: /^(●|🟣)$/ })
+  assert.deepEqual(
+    dots.map((dot) => [dot.text, dot.props.tone ?? (dot.props.muted ? 'muted' : null)]),
+    [['●', 'warning'], ['●', 'success'], ['●', 'danger'], ['🟣', 'muted'], ['●', 'muted']]
+  )
+  // A badge per row in the dot's colour; merged carries the purple emoji, closed is grey.
+  const badges = view.findAll({ type: 'Badge', text: /^(Running|Ready|Failed|🟣 Merged|Closed)$/ })
   assert.deepEqual(
     badges.map((badge) => [badge.text, badge.props.tone]),
-    [['Running', 'warning'], ['Ready', 'success'], ['Failed', 'danger'], ['Merged', 'accent'], ['Closed', 'neutral']]
+    [['Running', 'warning'], ['Ready', 'success'], ['Failed', 'danger'], ['🟣 Merged', 'neutral'], ['Closed', 'neutral']]
   )
   assert.equal(view.find({ type: 'Button', text: 'widget-chat' })?.props.tooltip, 'Running: Checks running. #50 fix: chat')
   assert.equal(view.find({ text: /fix\/chat/ }), null)
@@ -509,6 +514,45 @@ test('an opened card has a close button and no lock switch or branch picker', as
   await view.press({ label: 'Close Widget fix/chat' })
   assert.deepEqual(sent, [{ projectId: 'acme/widget', branch: 'fix/chat' }])
   assert.equal(view.find({ text: 'Checks on fix/chat' }), null)
+  await view.unmount()
+})
+
+const chatCard: ProjectStatus = { ...widget, detected: false, opened: true, branch: 'fix/chat', branches: ['fix/chat'] }
+/** The card headings of the Actions tab, top to bottom. */
+const cardOrder = (view: Awaited<ReturnType<typeof mount>>) => view.findAll({ text: /^Checks on / }).map((node) => node.text)
+
+test('an opened card sits under its own repository card when nothing is pinned', async () => {
+  const view = await mount(panel, { host: host({ requests: { 'status.get': () => ({ ...snapshot, opened: [chatCard] }) } }) })
+  assert.deepEqual(cardOrder(view), ['Checks on main', 'Checks on fix/chat', 'Checks on main'])
+  await view.unmount()
+})
+
+test('opened cards sit under the pinned card', async () => {
+  const projects = [{ ...tool, pinned: true, branch: 'trunk' }, widget]
+  const view = await mount(panel, { host: host({ requests: { 'status.get': () => ({ ...snapshot, projects, opened: [chatCard] }) } }) })
+  // The pinned Tool card, then the opened widget card, then widget's own card.
+  assert.deepEqual(cardOrder(view), ['Checks on trunk', 'Checks on fix/chat', 'Checks on main'])
+  await view.unmount()
+})
+
+test('the pin button shows 📌 or 🎯 Pinned and asks the worker', async () => {
+  const sent: unknown[] = []
+  const view = await mount(panel, {
+    host: host({
+      requests: {
+        'status.get': () => ({ ...snapshot, projects: [widget, { ...tool, pinned: true }] }),
+        // The fake keeps the pin where it was, so both buttons stay to press.
+        'card.pin': (input: unknown) => {
+          sent.push(input)
+          return { ...snapshot, projects: [widget, { ...tool, pinned: true }] }
+        }
+      }
+    })
+  })
+  assert.ok(view.find({ type: 'Button', text: '🎯 Pinned' }))
+  await view.press({ type: 'Button', text: '📌' })
+  await view.press({ type: 'Button', text: '🎯 Pinned' })
+  assert.deepEqual(sent, [{ projectId: 'acme/widget', pinned: true }, { projectId: 'Acme/Tool', pinned: false }])
   await view.unmount()
 })
 

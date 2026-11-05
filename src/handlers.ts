@@ -10,6 +10,8 @@ const OVERALL_KEY = 'overall'
 const PROJECTS_KEY = 'projects'
 const SETTINGS_KEY = 'settings'
 const LOCKS_KEY = 'locks'
+/** The lower-case repository of the pinned card, or null. */
+const PIN_KEY = 'pin'
 
 /** A branch the user locked. The repository keeps its GitHub casing so the card can list it with no workspace. */
 interface Lock {
@@ -272,8 +274,9 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
       worktreePrs(found, force)
     ])
     prRepo = found?.repo ?? null
+    const pin = (await orca.storage.get(PIN_KEY)) as string | null
     snapshot = {
-      projects,
+      projects: projects.map((project) => ({ ...project, pinned: project.id.toLowerCase() === pin })),
       opened: openedCards,
       worktreePrs: prs,
       ...(typeof detected === 'string' ? { detectNote: detected } : {}),
@@ -323,6 +326,14 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
     const repo = prRepo
     if (listed && repo && !opened.some((card) => sameRepo(card.repo, repo) && card.branch === branch)) {
       opened = [...opened, { repo, branch }]
+    }
+    return refresh(false)
+  })
+
+  orca.panels.handle('card.pin', async ({ projectId, pinned }) => {
+    // Only a project card the panel listed.
+    if (snapshot?.projects.some((p) => p.id === projectId)) {
+      await orca.storage.set(PIN_KEY, pinned ? projectId.toLowerCase() : null)
     }
     return refresh(false)
   })

@@ -61,6 +61,8 @@ const ACTIONS_WORDS: Record<Overall, string> = {
   failed: 'Failing',
   unknown: 'Unknown'
 }
+/** Merged is purple, and Orca's kit has no purple tone: this emoji carries the colour. */
+const PURPLE = '🟣'
 const ICON: Record<StageState, string> = { done: 'check', running: 'refresh', idle: 'info', blocked: 'warning', failed: 'error' }
 
 async function show(task: () => Promise<StatusSnapshot>): Promise<void> {
@@ -79,6 +81,8 @@ const openCard = async (branch: string): Promise<void> => {
   set(view, 'actions')
   await show(() => plugin.request('card.open', { branch }, REQUEST))
 }
+const pinCard = (projectId: string, pinned: boolean) =>
+  show(() => plugin.request('card.pin', { projectId, pinned }, REQUEST))
 const closeCard = (projectId: string, branch: string) =>
   show(() => plugin.request('card.close', { projectId, branch }, REQUEST))
 
@@ -201,7 +205,7 @@ function BranchPrLine({ project }: { project: ProjectStatus }) {
     return <Text muted size="xs">{`No PR for ${project.branch}`}</Text>
   }
   return (
-    <Row gap="xs" align="center">
+    <Row gap="xs" align="center" wrap>
       <Button
         variant="ghost"
         size="xs"
@@ -210,7 +214,7 @@ function BranchPrLine({ project }: { project: ProjectStatus }) {
       >
         {`PR #${pr.number}: ${shorten(pr.title)}`}
       </Button>
-      <Badge tone={pr.state === 'open' ? 'success' : pr.state === 'merged' ? 'accent' : 'neutral'}>{pr.state}</Badge>
+      <Badge tone={pr.state === 'open' ? 'success' : 'neutral'}>{pr.state === 'merged' ? `${PURPLE} merged` : pr.state}</Badge>
     </Row>
   )
 }
@@ -221,7 +225,7 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
     <Card title={project.name} description={project.actions.summary}>
       <Stack gap="sm">
         <Row gap="xs" align="center" justify="between">
-          <Row gap="xs" align="center">
+          <Row gap="xs" align="center" wrap>
             <Badge tone={TONE[project.actions.overall]}>{ACTIONS_WORDS[project.actions.overall]}</Badge>
             {project.detected ? <Badge tone="neutral">This project</Badge> : null}
             {project.opened ? (
@@ -229,11 +233,22 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
             ) : (
               <>
                 <Badge tone={project.locked ? 'success' : 'warning'}>{project.locked ? 'Locked' : 'Unlocked'}</Badge>
-                <Switch
-                  label={ZERO_WIDTH}
-                  checked={project.locked}
-                  onChange={(value) => void lockBranch(project.id, value)}
-                />
+                {/* Orca puts 12px before a switch for its hidden label; `sm` plus the button's 8px padding matches it after. */}
+                <Row gap="sm" align="center" wrap>
+                  <Switch
+                    label={ZERO_WIDTH}
+                    checked={project.locked}
+                    onChange={(value) => void lockBranch(project.id, value)}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    tooltip={project.pinned ? 'Unpin: cards opened from PRs go under their own project' : 'Pin: cards opened from PRs go under this card'}
+                    onPress={() => void pinCard(project.id, !project.pinned)}
+                  >
+                    {project.pinned ? '🎯 Pinned' : '📌'}
+                  </Button>
+                </Row>
               </>
             )}
           </Row>
@@ -321,7 +336,7 @@ function ReleaseCard({ project }: { project: ProjectStatus }) {
   return (
     <Card title={project.name} description={hasFlow ? project.summary : project.flowNote}>
       <Stack gap="sm">
-        <Row gap="xs" align="center">
+        <Row gap="xs" align="center" wrap>
           {hasFlow ? (
             <Badge tone={TONE[project.overall]}>{RELEASE_WORDS[project.overall]}</Badge>
           ) : (
@@ -375,14 +390,23 @@ function ReleaseCard({ project }: { project: ProjectStatus }) {
   )
 }
 
+/** Opened cards go under the pinned card; with no pin, under their own repository's card; else last. */
+function cardOrder(projects: ProjectStatus[], opened: ProjectStatus[]): ProjectStatus[] {
+  const pinned = projects.find((p) => p.pinned)
+  const placed = new Set<ProjectStatus>()
+  const order = projects.flatMap((project) => {
+    const below = opened.filter((card) => !placed.has(card) && (pinned ? project === pinned : card.id === project.id))
+    below.forEach((card) => placed.add(card))
+    return [project, ...below]
+  })
+  return [...order, ...opened.filter((card) => !placed.has(card))]
+}
+
 function ActionsView({ projects, opened }: { projects: ProjectStatus[]; opened: ProjectStatus[] }) {
   return (
     <Stack gap="md">
-      {projects.map((project) => (
-        <ActionsCard key={project.id} project={project} />
-      ))}
-      {opened.map((project) => (
-        <ActionsCard key={`${project.id}@${project.branch}`} project={project} />
+      {cardOrder(projects, opened).map((project) => (
+        <ActionsCard key={project.opened ? `${project.id}@${project.branch}` : project.id} project={project} />
       ))}
       <Card title="Add a project" description="Any GitHub repository that gh can read.">
         <Row gap="xs" align="end">
@@ -403,12 +427,12 @@ function ActionsView({ projects, opened }: { projects: ProjectStatus[]; opened: 
   )
 }
 
-/** Orca's kit has five tones and no purple: merged takes `accent`, the theme colour; closed is muted grey. */
-const PR_DOT: Record<PrState, ['warning' | 'success' | 'danger' | 'accent' | undefined, string]> = {
+/** Orca's kit has no purple tone, so merged is a grey badge with a purple emoji; closed is muted grey. */
+const PR_DOT: Record<PrState, ['warning' | 'success' | 'danger' | undefined, string]> = {
   running: ['warning', 'Running'],
   ready: ['success', 'Ready to merge'],
   failed: ['danger', 'Failing'],
-  merged: ['accent', 'Merged'],
+  merged: [undefined, 'Merged'],
   closed: [undefined, 'Closed']
 }
 /** The badge beside the dot: same colour, one short word. */
@@ -416,7 +440,7 @@ const PR_BADGE_WORD: Record<PrState, string> = {
   running: 'Running',
   ready: 'Ready',
   failed: 'Failed',
-  merged: 'Merged',
+  merged: '🟣 Merged',
   closed: 'Closed'
 }
 
@@ -425,9 +449,9 @@ function PrLine({ pr }: { pr: WorktreePr }) {
   const [tone, word] = PR_DOT[pr.state]
   const state = pr.reason ? `${word}: ${pr.reason}` : word
   return (
-    <Row gap="xs" align="center" justify="between">
+    <Row gap="xs" align="center" justify="between" wrap>
       <Row gap="xs" align="center">
-        {tone ? <Text tone={tone}>●</Text> : <Text muted>●</Text>}
+        {tone ? <Text tone={tone}>●</Text> : <Text muted>{pr.state === 'merged' ? PURPLE : '●'}</Text>}
         <Button variant="ghost" size="xs" tooltip={`${state}. #${pr.number} ${pr.title}`} onPress={() => void openCard(pr.branch)}>
           {pr.worktree}
         </Button>

@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
-import { checksOf } from './facts'
-import { parseRepo, projectDef, settingsProblem, type DetectedFlow } from './projects'
-import { classify, prState, type Check, type Facts, type Run, type View } from './status'
+import { checksOf } from '../facts'
+import { parseRepo, projectDef, settingsProblem, type DetectedFlow } from '../projects'
+import { classify, prState, type Check, type Facts, type Run, type View } from '../status'
 
 const FLOWS: Record<string, [string, DetectedFlow | null, { agentPrompt: string; updaterUrl: string }]> = {
   npm: ['acme/widget', { kind: 'release-please-npm', npmPackage: 'widget-pkg' }, { agentPrompt: '/release-agent', updaterUrl: '' }],

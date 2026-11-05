@@ -1,6 +1,6 @@
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
-import type { Io } from './facts'
-import { register } from './handlers'
+import type { Io } from '../facts'
+import { register } from '../handlers'
 
 const WIDGET = 'acme/widget'
 
@@ -275,6 +275,19 @@ test('card.open adds a card for a listed worktree branch, once, and card.close r
   assert.deepEqual(opened[0]?.checks.map((c) => c.id), [4, 5])
   assert.equal((await worker.request('card.open', { branch: 'v3' })).opened.length, 1)
   assert.deepEqual((await worker.request('card.close', { projectId: WIDGET, branch: 'v3' })).opened, [])
+  await worker.deactivate()
+})
+
+test('card.pin pins one listed card at a time, keeps it in storage, and unpins', async () => {
+  const host = hostFor({ id: 'w1' }, { projects: ['Acme/Tool'] })
+  const worker = await mount(fakeIo(), host)
+  await worker.request('status.get')
+  const pinnedOf = (s: { projects: { id: string; pinned?: boolean }[] }) => s.projects.filter((p) => p.pinned).map((p) => p.id)
+  assert.deepEqual(pinnedOf(await worker.request('card.pin', { projectId: WIDGET, pinned: true })), [WIDGET])
+  assert.deepEqual(pinnedOf(await worker.request('card.pin', { projectId: 'Acme/Tool', pinned: true })), ['Acme/Tool'])
+  assert.equal(host.data().storage.pin, 'acme/tool')
+  assert.deepEqual(pinnedOf(await worker.request('card.pin', { projectId: 'nope/none', pinned: true })), ['Acme/Tool'])
+  assert.deepEqual(pinnedOf(await worker.request('card.pin', { projectId: 'Acme/Tool', pinned: false })), [])
   await worker.deactivate()
 })
 
