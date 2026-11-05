@@ -1,6 +1,6 @@
 // Pure: turns what GitHub, npm and the updater said into stages and one overall state.
 import type { ProjectDef } from './projects'
-import type { CheckRow, Overall, ProjectStatus, RunJobs, RunState, Stage, StageState } from './protocol'
+import type { BranchPr, CheckRow, Overall, ProjectStatus, RunJobs, RunState, Stage, StageState } from './protocol'
 
 export interface Run {
   id: number
@@ -39,6 +39,8 @@ export interface Facts {
   finalizeRun: Run | null
   /** Checks of the newest commit on the viewed branch. */
   checks: Check[]
+  /** The pull request of the viewed branch. */
+  branchPr: BranchPr | null
   /** Jobs of the release runs that have not passed. */
   jobGroups: { label: string; run: Run; jobs: Check[] }[]
   /** Newest published GitHub release. */
@@ -260,6 +262,7 @@ export function classify(def: ProjectDef, f: Facts, view: View): ProjectStatus {
     branch: view.branch,
     branches: view.branches,
     checks,
+    branchPr: f.branchPr,
     ...(def.agentPrompt ? { agentPrompt: def.agentPrompt } : {})
   }
 }
@@ -281,6 +284,7 @@ export function unknownStatus(def: ProjectDef, error: unknown, view: View): Proj
     releaseJobs: [],
     branch: view.branch,
     branches: view.branches,
-    checks: []
+    checks: [],
+    branchPr: null
   }
 }

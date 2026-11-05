@@ -23,6 +23,13 @@ export interface CheckRow {
   rerunnable: boolean
   url: string
 }
+/** The newest pull request whose head is the viewed branch, open, merged or closed. */
+export interface BranchPr {
+  number: number
+  url: string
+  title: string
+  state: 'open' | 'merged' | 'closed'
+}
 /** What the user can set per project. Empty strings mean not set. */
 /** The jobs of one release run that did not pass, so the reader can see what failed and retry it. */
 export interface RunJobs {
@@ -69,6 +76,8 @@ export interface ProjectStatus {
   branches: string[]
   /** Checks of the newest commit on `branch`: failed first, then running, passed and skipped. */
   checks: CheckRow[]
+  /** The pull request of `branch`; null when the branch has none or GitHub could not say. */
+  branchPr: BranchPr | null
   /** The slash command that hands this project's release to an agent. */
   agentPrompt?: string
 }

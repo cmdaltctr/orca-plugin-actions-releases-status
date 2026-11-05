@@ -2,6 +2,7 @@
 // so tests can stand in for GitHub, npm and the updater.
 import { execFile } from 'node:child_process'
 import { parseRepo, RELEASE_BRANCH, type DetectedFlow, type ProjectDef } from './projects'
+import type { BranchPr } from './protocol'
 import type { Check, Facts, ReleasePr, Run } from './status'
 
 export interface Io {
@@ -131,6 +132,26 @@ async function releasePr(def: ProjectDef, io: Io): Promise<ReleasePr | null> {
   return pr ? { number: pr.number, url: pr.url, checks: checksOf(pr.statusCheckRollup) } : null
 }
 
+interface RawBranchPr {
+  number: number
+  url: string
+  title: string
+  state: string
+}
+
+/** The newest pull request from `branch`, whatever its state. A failed read shows none. */
+async function branchPrOf(repo: string, branch: string, io: Io): Promise<BranchPr | null> {
+  try {
+    const [pr] = (await io.ghJson([
+      'pr', 'list', '-R', repo, '--head', branch, '--state', 'all', '--limit', '1',
+      '--json', 'number,url,title,state'
+    ])) as RawBranchPr[]
+    return pr ? { number: pr.number, url: pr.url, title: pr.title, state: pr.state.toLowerCase() as BranchPr['state'] } : null
+  } catch {
+    return null
+  }
+}
+
 async function newestRelease(def: ProjectDef, io: Io): Promise<Facts['release']> {
   const [latest] = (await io.ghJson([
     'release', 'list', '-R', def.repo, '--limit', '1', '--exclude-drafts', '--json', 'tagName'
@@ -252,9 +273,10 @@ export async function gatherFacts(def: ProjectDef, branch: string, io: Io): Prom
   const releaseRuns = def.kind ? listRuns(def.repo, RELEASE_BRANCH, 100, io) : Promise.resolve([] as RawRun[])
   // Only the newest run is needed from another branch: its commit names the checks to show.
   const branchRuns = def.kind && branch === RELEASE_BRANCH ? releaseRuns : listRuns(def.repo, branch, 1, io)
-  const [runs, checks, release, pr, npm, updater] = await Promise.all([
+  const [runs, checks, branchPr, release, pr, npm, updater] = await Promise.all([
     releaseRuns,
     branchRuns.then((newest) => (newest[0] ? checksOfCommit(def.repo, newest[0].headSha, io) : [])),
+    branchPrOf(def.repo, branch, io),
     def.kind ? newestRelease(def, io) : null,
     releasePr(def, io),
     def.npmPackage
@@ -278,6 +300,7 @@ export async function gatherFacts(def: ProjectDef, branch: string, io: Io): Prom
     releaseRun: toRun(runs.find((r) => r.workflowName === 'Release')),
     finalizeRun: toRun(runs.find((r) => r.workflowName === 'Finalize Desktop Release')),
     checks,
+    branchPr,
     jobGroups,
     release,
     npmLatest: npm?.latest ?? null,

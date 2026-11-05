@@ -182,6 +182,32 @@ function CheckLine({ project, check }: { project: ProjectStatus; check: CheckRow
   )
 }
 
+/** Longest title shown on the PR line. Orca's Button does not clip text, so the cut happens here. */
+const PR_TITLE_SHOWN = 26
+
+const shorten = (title: string): string => (title.length > PR_TITLE_SHOWN ? `${title.slice(0, PR_TITLE_SHOWN).trimEnd()}...` : title)
+
+/** The PR of the viewed branch on one line. The full title shows on hover and the button opens the PR. */
+function BranchPrLine({ project }: { project: ProjectStatus }) {
+  const pr = project.branchPr
+  if (!pr) {
+    return <Text muted size="xs">{`No PR for ${project.branch}`}</Text>
+  }
+  return (
+    <Row gap="xs" align="center">
+      <Button
+        variant="ghost"
+        size="xs"
+        tooltip={`#${pr.number} ${pr.title}`}
+        onPress={() => void shell.openExternal(pr.url)}
+      >
+        {`PR #${pr.number}: ${shorten(pr.title)}`}
+      </Button>
+      <Badge tone={pr.state === 'open' ? 'success' : pr.state === 'merged' ? 'accent' : 'neutral'}>{pr.state}</Badge>
+    </Row>
+  )
+}
+
 /** The Actions tab: the checks of one branch's newest commit, with the branch picker and project controls. */
 function ActionsCard({ project }: { project: ProjectStatus }) {
   return (
@@ -216,6 +242,7 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
             onChange={(value) => void selectBranch(project.id, value)}
           />
         ) : null}
+        <BranchPrLine project={project} />
         <Stack gap="xs">
           <Text muted size="xs">{`Checks on ${project.branch}`}</Text>
           {project.checks.slice(0, CHECKS_SHOWN).map((check) => (
@@ -283,6 +310,7 @@ function ReleaseCard({ project }: { project: ProjectStatus }) {
           {project.detected ? <Badge tone="neutral">This project</Badge> : null}
         </Row>
         {hasFlow ? <Text muted size="xs">{`Found: ${project.flowNote}`}</Text> : null}
+        <BranchPrLine project={project} />
         {project.stages.length > 0 ? (
           <List label={`${project.name} stages`}>
             {project.stages.map((stage) => (

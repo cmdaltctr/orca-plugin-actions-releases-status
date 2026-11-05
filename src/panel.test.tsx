@@ -30,6 +30,7 @@ const widget: ProjectStatus = {
   branch: 'main',
   branches: ['main', 'v3'],
   checks: [check({ id: 9, name: 'Release', state: 'running', runId: 90, url: 'https://c/9' })],
+  branchPr: { number: 42, url: 'https://github.com/Acme/Widget/pull/42', title: 'fix: first message', state: 'open' },
   agentPrompt: '/release-agent'
 }
 
@@ -48,6 +49,7 @@ const tool: ProjectStatus = {
   releaseJobs: [],
   branch: 'main',
   branches: ['main'],
+  branchPr: null,
   checks: [
     check({ id: 3, name: 'CI', state: 'failed', runId: 30, rerunnable: true, url: 'https://c/3' }),
     check({ id: 2, name: 'lint', state: 'passed', runId: 30, url: 'https://c/2' })
@@ -214,6 +216,31 @@ test('checks past the first eight fold into one row', async () => {
   })
   assert.equal(view.findAll({ type: 'Badge', text: 'Passed' }).length, 8)
   assert.ok(view.find({ label: '2 more checks' }))
+  await view.unmount()
+})
+
+test('the Actions tab shows the PR number on one line, and says there is none otherwise', async () => {
+  const view = await mount(panel, { host: host() })
+  assert.ok(view.find({ type: 'Button', text: 'PR #42: fix: first message' }))
+  assert.ok(view.find({ type: 'Badge', text: 'open' }))
+  assert.ok(view.find({ text: 'No PR for main' }))
+  await view.unmount()
+})
+
+test('a long PR title is cut with three dots and the full title is the hover text', async () => {
+  const title = 'fix(web): say when memory injection runs and what each switch adds'
+  const long = { ...widget, branchPr: { number: 237, url: 'https://github.com/Acme/Widget/pull/237', title, state: 'merged' as const } }
+  const view = await mount(panel, { host: host({ requests: { 'status.get': () => only(long) } }) })
+  assert.ok(view.find({ type: 'Button', text: 'PR #237: fix(web): say when memory...' }))
+  assert.ok(JSON.stringify(view.tree()).includes(`#237 ${title}`))
+  assert.equal(view.find({ text: new RegExp(title) }), null)
+  await view.unmount()
+})
+
+test('the Releases tab shows the same PR line', async () => {
+  const view = await mount(panel, { host: host() })
+  await view.select({ label: 'View' }, 'releases')
+  assert.ok(view.find({ type: 'Button', text: 'PR #42: fix: first message' }))
   await view.unmount()
 })
 

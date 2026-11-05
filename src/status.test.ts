@@ -32,6 +32,7 @@ const facts = (over: Partial<Facts> = {}): Facts => ({
   releaseRun: run(),
   finalizeRun: null,
   checks: [],
+  branchPr: null,
   jobGroups: [],
   release: { tag: 'v5.2.0', url: 'https://github.com/x/y/releases/tag/v5.2.0', assets: [] },
   npmLatest: '5.2.0',

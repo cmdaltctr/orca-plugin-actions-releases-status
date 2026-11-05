@@ -134,7 +134,9 @@ function fakeIo(world: Partial<World> = {}, calls: string[][] = [], terminalLook
         return repo === WIDGET ? widgetRuns : [run(1, 'CI', 'SUCCESS')]
       }
       if (args[0] === 'pr') {
-        return []
+        // `--head` asks for the pull request of one branch; the release PR lookup has no `--head`.
+        const head = args.includes('--head') ? args[args.indexOf('--head') + 1] : null
+        return head === 'v3' ? [{ number: 7, url: 'https://github.com/x/widget/pull/7', title: 'feat: v3', state: 'MERGED' }] : []
       }
       return [{ tagName: w.tag }]
     },
@@ -222,6 +224,23 @@ test('branch.select shows the checks of another branch, while release stages kee
   assert.equal(after?.branch, 'v3')
   assert.deepEqual(after?.checks.map((c) => [c.id, c.name, c.rerunnable]), [[4, 'build', true], [5, 'codecov/patch', false]])
   assert.equal(after?.stages.find((s) => s.id === 'run')?.state, 'done')
+  await worker.deactivate()
+})
+
+test('the pull request of the shown branch follows the branch picker', async () => {
+  const worker = await mount(fakeIo(), hostFor({ id: 'w1' }))
+  assert.equal((await worker.request('status.get')).projects[0]?.branchPr, null)
+  const after = (await worker.request('branch.select', { projectId: WIDGET, branch: 'v3' })).projects[0]
+  assert.deepEqual(after?.branchPr, { number: 7, url: 'https://github.com/x/widget/pull/7', title: 'feat: v3', state: 'merged' })
+  await worker.deactivate()
+})
+
+test('a failed pull request lookup shows no pull request and keeps the checks', async () => {
+  const io = fakeIo()
+  const worker = await mount({ ...io, ghJson: async (args) => (args.includes('--head') ? Promise.reject(new Error('boom')) : io.ghJson(args)) })
+  const project = (await worker.request('status.get')).projects[0]
+  assert.equal(project?.branchPr, null)
+  assert.ok((project?.checks.length ?? 0) > 0)
   await worker.deactivate()
 })
 
