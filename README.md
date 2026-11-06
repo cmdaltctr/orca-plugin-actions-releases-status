@@ -6,7 +6,7 @@ Shows the pull requests, GitHub Actions checks and release state of the project 
 
 1. In Orca, open **Settings → Plugins**.
 2. Choose **Add plugin**, then **From a Git URL…**.
-3. Paste this URL and choose **Install**: `https://github.com/cmdaltctr/orca-plugin-prs-actions-releases-status#v0.1.0`
+3. Paste this URL and choose **Install**: `https://github.com/cmdaltctr/orca-plugin-prs-actions-releases-status#v0.1.2`
 4. Read the access list that Orca shows, then enable the plugin.
 5. Sign in to the `gh` CLI on your machine: `gh auth login`.
 

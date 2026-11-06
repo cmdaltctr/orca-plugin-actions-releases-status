@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "release-status",
   "name": "PRs, Actions and Releases Status",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Shows the pull requests, GitHub Actions checks and release state of the project in your focused Orca workspace. It is for developers who ship from GitHub. Read the checks of any branch or added repository, re-run failed checks, and ask an agent to take over a release.",
   "license": "MIT",
   "publisher": "cmdaltctr",
