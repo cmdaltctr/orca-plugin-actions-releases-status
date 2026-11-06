@@ -31,14 +31,15 @@ Orca's own Checks panel follows the workspace you have open. This panel also let
 ## Which projects it shows
 
 1. **This project** comes first. The panel reads the focused workspace, finds its GitHub `origin` remote and shows that repository. When focus moves to another project, this card changes with it, unless you locked its branch.
-2. **Added projects** come after. Type `owner/name` or a GitHub URL in **Add a project**. The plugin checks that `gh` can read the repository, then stores it. The remove button on a card drops it.
+2. **Locked cards** stay where they are when focus moves away. A locked worktree card stays in **All worktrees**.
+3. **Added projects** come after. Type `owner/name` or a GitHub URL in **Add a project**. The plugin checks that `gh` can read the repository, then stores it. The remove button on a card drops it.
 
 Many workspaces share the name and branch `main`. The plugin asks Orca's CLI (`orca terminal list`) which workspace owns the focused terminal. If the CLI is not found, it falls back to matching branch and name, and says so when that is ambiguous.
 
 ## Three tabs
 
 - **PRs**: the pull requests of the focused project's local worktrees, by worktree name.
-- **Actions** (opens first): every project with the checks of one branch, the branch picker, retry buttons, remove buttons and the **Add a project** card.
+- **Actions** (opens first): every project with the checks of one branch, the branch picker, retry buttons, remove buttons and the **Add a project** card. Cards can be locked and pinned. Search, a state filter and a sort sit above them. With two or more worktrees, an **All worktrees** tab shows one card per worktree branch.
 - **Releases**: every project with its release stages and state, or a note on what was looked for when no release flow was found. Each card has optional **Settings**.
 
 ## PRs tab
