@@ -128,8 +128,11 @@ declare module 'orca' {
     'status.refresh': { output: StatusSnapshot }
     /** Shows the runs of another branch of one project. */
     'branch.select': { input: { projectId: string; branch: string }; output: StatusSnapshot }
-    /** Locks the branch now shown for a project, or unlocks it. A locked card stays on its branch and stays listed. */
-    'branch.lock': { input: { projectId: string; locked: boolean }; output: StatusSnapshot }
+    /**
+     * Locks the branch now shown for a project, or unlocks it. A locked card stays on its branch and stays listed.
+     * With `branch`, locks a worktree card instead: it stays in All worktrees when focus moves to another project.
+     */
+    'branch.lock': { input: { projectId: string; branch?: string; locked: boolean }; output: StatusSnapshot }
     /** Opens a card on the Actions tab for the branch of a worktree the PRs tab listed. */
     'card.open': { input: { branch: string }; output: StatusSnapshot }
     /** Pins a listed card, or unpins it. `branch` names an opened or worktree card; without it the card is the project's. */

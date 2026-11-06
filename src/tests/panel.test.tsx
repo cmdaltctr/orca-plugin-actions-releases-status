@@ -609,9 +609,36 @@ test('All worktrees shows one card per worktree branch, marks the focused one, a
   assert.deepEqual(worktreeOrder(view), ['widget', 'widget-chat', 'widget-lint', 'widget-ocr'])
   assert.ok(view.find({ type: 'Badge', text: 'This worktree' }))
   assert.equal(view.find({ label: 'Add a project' }), null)
-  assert.equal(view.find({ role: 'switch' }), null)
+  // Each card has a lock switch; none has a branch picker or a remove or close button.
+  assert.equal(view.findAll({ role: 'switch' }).length, 4)
   assert.equal(view.find({ type: 'Select', label: /Branch of/ }), null)
   assert.equal(view.find({ type: 'IconButton', label: /^(Remove|Close) / }), null)
+  await view.unmount()
+})
+
+test('the lock switch of a worktree card sends the branch, shows Locked, and says the card stays in All worktrees', async () => {
+  const sent: unknown[] = []
+  const one = [sibling('widget-chat', 'fix/chat', 'running'), sibling('widget-ocr', 'fix/ocr', 'ok')]
+  const locked = [{ ...one[0], locked: true } as ProjectStatus, one[1]]
+  const view = await mount(panel, {
+    host: host({
+      requests: {
+        'status.get': () => ({ ...snapshot, worktrees: one }),
+        'branch.lock': (input: unknown) => {
+          sent.push(input)
+          return { ...snapshot, worktrees: locked }
+        }
+      }
+    })
+  })
+  await openAll(view)
+  assert.equal(view.findAll({ type: 'Badge', text: 'Unlocked' }).length, 2)
+  await view.toggle({ role: 'switch' })
+  // The first switch belongs to the first card, widget-chat, on branch fix/chat.
+  assert.deepEqual(sent, [{ projectId: 'acme/widget', branch: 'fix/chat', locked: true }])
+  assert.equal(view.findAll({ type: 'Badge', text: 'Locked' }).length, 1)
+  assert.ok(view.find({ type: 'IconButton', label: /^Lock: keep this card in All worktrees/ }))
+  assert.equal(view.find({ type: 'IconButton', label: /^Lock: keep this card on / }), null)
   await view.unmount()
 })
 

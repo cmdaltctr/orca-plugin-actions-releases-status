@@ -330,6 +330,60 @@ test('card.pin pins an opened card and a worktree card by branch, apart from the
   await worker.deactivate()
 })
 
+test('branch.lock with a branch locks a worktree card, keeps it in storage, and unlocks', async () => {
+  const host = hostFor({ id: 'w1' })
+  const worker = await mount(fakeIo(), host)
+  await worker.request('status.get')
+  const locked = await worker.request('branch.lock', { projectId: WIDGET, branch: 'v3', locked: true })
+  assert.deepEqual(locked.worktrees.map((p) => [p.branch, p.locked]), [['main', false], ['v3', true]])
+  assert.deepEqual(host.data().storage.wlocks, { 'acme/widget@v3': { repo: WIDGET, branch: 'v3', worktree: 'widget-v3' } })
+  // The project card keeps its own lock, so the worktree lock leaves it alone.
+  assert.deepEqual(locked.projects.map((p) => p.locked), [false])
+  assert.deepEqual(host.data().storage.locks ?? {}, {})
+  // A branch that no worktree card shows is ignored.
+  await worker.request('branch.lock', { projectId: WIDGET, branch: 'gone', locked: true })
+  assert.deepEqual(Object.keys(host.data().storage.wlocks as object), ['acme/widget@v3'])
+  const unlocked = await worker.request('branch.lock', { projectId: WIDGET, branch: 'v3', locked: false })
+  assert.deepEqual(unlocked.worktrees.map((p) => p.locked), [false, false])
+  assert.deepEqual(host.data().storage.wlocks, {})
+  await worker.deactivate()
+})
+
+test('a locked worktree card stays in the list when focus moves to another project', async () => {
+  const focus = { id: 'w1' as string | null }
+  const worker = await mount(fakeIo(), hostFor(focus))
+  await worker.request('status.get')
+  await worker.request('branch.lock', { projectId: WIDGET, branch: 'v3', locked: true })
+  focus.id = 'w3'
+  const { worktrees } = await worker.request('status.refresh')
+  // `other` has a single worktree, so only the locked card is listed, still marked locked and not as this worktree.
+  assert.deepEqual(worktrees.map((p) => [p.id, p.worktree, p.branch, p.locked, p.detected]), [[WIDGET, 'widget-v3', 'v3', true, false]])
+  assert.deepEqual(worktrees[0]?.checks.map((c) => c.id), [4, 5])
+  await worker.deactivate()
+})
+
+test('a locked worktree card is listed once when its project is focused, and goes with its worktree', async () => {
+  const workspaces = [...WORKSPACES]
+  const host = hostFor({ id: 'w1' }, {}, workspaces)
+  const worker = await mount(fakeIo(), host)
+  await worker.request('status.get')
+  await worker.request('branch.lock', { projectId: WIDGET, branch: 'v3', locked: true })
+  assert.equal((await worker.request('status.refresh')).worktrees.filter((p) => p.branch === 'v3').length, 1)
+  workspaces.splice(workspaces.findIndex((w) => w.id === 'w2'), 1)
+  const snapshot = await worker.request('status.refresh')
+  assert.deepEqual(snapshot.worktrees, [])
+  assert.deepEqual(host.data().storage.wlocks, {})
+  await worker.deactivate()
+})
+
+test('a worktree lock on the default branch is never released', async () => {
+  const storage = { wlocks: { 'acme/widget@main': { repo: WIDGET, branch: 'main', worktree: 'widget' } } }
+  const workspaces = WORKSPACES.filter((w) => w.id !== 'w1')
+  const worker = await mount(fakeIo(), hostFor({ id: 'w2' }, storage, workspaces))
+  assert.deepEqual((await worker.request('status.get')).worktrees.map((p) => [p.branch, p.locked]), [['main', true]])
+  await worker.deactivate()
+})
+
 test('deleting a worktree closes its opened card and releases a lock on its branch', async () => {
   const workspaces = [...WORKSPACES]
   const host = hostFor({ id: 'w1' }, {}, workspaces)

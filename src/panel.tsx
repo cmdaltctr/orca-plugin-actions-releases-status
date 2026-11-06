@@ -122,8 +122,13 @@ async function act(task: () => Promise<{ message: string }>): Promise<void> {
   }
 }
 
-const lockBranch = (projectId: string, locked: boolean) =>
-  show(() => plugin.request('branch.lock', { projectId, locked }, REQUEST))
+/** A worktree card is locked by its branch; a project card by its repository alone. */
+const lockBranch = (card: ProjectStatus, locked: boolean) =>
+  show(() => plugin.request('branch.lock', { projectId: card.id, ...(card.worktree ? { branch: card.branch } : {}), locked }, REQUEST))
+const lockHelp = (card: ProjectStatus): string =>
+  card.worktree
+    ? 'Lock: keep this card in All worktrees when you focus another project.'
+    : `Lock: keep this card on ${card.branch} when you focus another project.`
 const rerun = (projectId: string, runId: number) =>
   act(() => plugin.request('run.rerun', { projectId, runId }, REQUEST))
 const addProject = () =>
@@ -268,9 +273,7 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
             <Badge tone={TONE[project.actions.overall]}>{ACTIONS_WORDS[project.actions.overall]}</Badge>
             {project.worktree ? <Badge tone="neutral">{project.worktree}</Badge> : null}
             {project.detected ? <Badge tone="neutral">{project.worktree ? 'This worktree' : 'This project'}</Badge> : null}
-            {project.worktree ? (
-              <PinButton project={project} />
-            ) : project.opened ? (
+            {project.opened ? (
               <>
                 <Badge tone="neutral">{project.branch}</Badge>
                 <PinButton project={project} />
@@ -283,12 +286,12 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
                   <Switch
                     label={ZERO_WIDTH}
                     checked={project.locked}
-                    onChange={(value) => void lockBranch(project.id, value)}
+                    onChange={(value) => void lockBranch(project, value)}
                   />
                   <IconButton
                     icon="info"
-                    label={`Lock: keep this card on ${project.branch} when you focus another project.`}
-                    tooltip={`Lock: keep this card on ${project.branch} when you focus another project.`}
+                    label={lockHelp(project)}
+                    tooltip={lockHelp(project)}
                     variant="ghost"
                   />
                   <PinButton project={project} />

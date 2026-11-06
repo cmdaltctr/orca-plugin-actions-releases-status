@@ -12,6 +12,8 @@ const SETTINGS_KEY = 'settings'
 const LOCKS_KEY = 'locks'
 /** The keys of the pinned cards (see `pinKey`). Several cards can be pinned. */
 const PINS_KEY = 'pins'
+/** The locked worktree cards, by `pinKey(repo, branch)`. Apart from `locks`, which holds one branch per project card. */
+const WLOCKS_KEY = 'wlocks'
 
 /** A project card is pinned by its lower-case repository; an opened or worktree card by `repo@branch`. */
 const pinKey = (repo: string, branch?: string): string => (branch === undefined ? repo.toLowerCase() : `${repo.toLowerCase()}@${branch}`)
@@ -20,6 +22,12 @@ const pinKey = (repo: string, branch?: string): string => (branch === undefined 
 interface Lock {
   repo: string
   branch: string
+}
+
+/** A worktree card the user locked, so it stays in All worktrees when focus moves to another project. */
+interface WorktreeLock extends Lock {
+  /** The worktree's name, kept so the card can be listed with no workspace. */
+  worktree: string
 }
 
 /** One row of the host's `workspace.list`. */
@@ -218,21 +226,24 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
     return rows.filter((row): row is WorktreePr => row !== null)
   }
 
-  /** One Actions card per worktree branch of the focused project. Fewer than two worktrees leave nothing to switch between. */
+  /**
+   * One Actions card per worktree branch of the focused project (none with fewer than two worktrees,
+   * since there is nothing to switch between), then the locked cards of other projects.
+   */
   async function worktreeCards(found: Detected | null, force: boolean): Promise<ProjectStatus[]> {
-    if (!found) {
-      return []
-    }
+    const wlocks = await savedWorktreeLocks()
     // Several workspaces can share a branch; the first, which is the focused one if it is on that branch, names the card.
-    const unique = found.worktrees.filter((w, i) => found.worktrees.findIndex((other) => other.branch === w.branch) === i)
-    if (unique.length < 2) {
-      return []
-    }
+    const live = (found?.worktrees ?? []).filter((w, i, all) => all.findIndex((other) => other.branch === w.branch) === i)
+    const shown = found && live.length >= 2 ? live : []
+    const cards = shown.map(({ name, branch }) => ({ repo: found?.repo ?? '', branch, worktree: name, detected: branch === found?.focusedBranch }))
+    const extra = Object.entries(wlocks)
+      .filter(([key]) => !cards.some((card) => pinKey(card.repo, card.branch) === key))
+      .map(([, lock]) => ({ ...lock, detected: false }))
     return Promise.all(
-      unique.map(({ name, branch }) =>
+      [...cards, ...extra].map(({ repo, branch, worktree, detected }) =>
         look(
-          projectDef(found.repo, null),
-          { branch, branches: [branch], detected: branch === found.focusedBranch, locked: false, worktree: name },
+          projectDef(repo, null),
+          { branch, branches: [branch], detected, locked: pinKey(repo, branch) in wlocks, worktree },
           force
         )
       )
@@ -244,6 +255,9 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
     ((await orca.storage.get(SETTINGS_KEY)) as Record<string, ProjectSettings> | null) ?? {}
 
   const savedPins = async (): Promise<string[]> => ((await orca.storage.get(PINS_KEY)) as string[] | null) ?? []
+
+  const savedWorktreeLocks = async (): Promise<Record<string, WorktreeLock>> =>
+    ((await orca.storage.get(WLOCKS_KEY)) as Record<string, WorktreeLock> | null) ?? {}
 
   const savedLocks = async (): Promise<Record<string, Lock>> =>
     ((await orca.storage.get(LOCKS_KEY)) as Record<string, Lock> | null) ?? {}
@@ -296,16 +310,19 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
     }
     const has = (repo: string, branch: string) => local.get(repo.toLowerCase())?.has(branch) === true
     opened = opened.filter((card) => has(card.repo, card.branch))
-    const locks = await savedLocks()
-    const kept: Record<string, Lock> = {}
-    for (const [key, lock] of Object.entries(locks)) {
-      const gone = local.has(key) && !has(lock.repo, lock.branch) && lock.branch !== (await defaultBranchOf(lock.repo))
-      if (!gone) {
-        kept[key] = lock
+    const gone = async (lock: Lock): Promise<boolean> =>
+      local.has(lock.repo.toLowerCase()) && !has(lock.repo, lock.branch) && lock.branch !== (await defaultBranchOf(lock.repo))
+    for (const storageKey of [LOCKS_KEY, WLOCKS_KEY]) {
+      const locks = ((await orca.storage.get(storageKey)) as Record<string, Lock> | null) ?? {}
+      const kept: Record<string, Lock> = {}
+      for (const [key, lock] of Object.entries(locks)) {
+        if (!(await gone(lock))) {
+          kept[key] = lock
+        }
       }
-    }
-    if (Object.keys(kept).length !== Object.keys(locks).length) {
-      await orca.storage.set(LOCKS_KEY, kept)
+      if (Object.keys(kept).length !== Object.keys(locks).length) {
+        await orca.storage.set(storageKey, kept)
+      }
     }
   }
 
@@ -381,7 +398,16 @@ export function register(orca: OrcaWorkerApi, io: Io): void {
     return refresh(false)
   })
 
-  orca.panels.handle('branch.lock', async ({ projectId, locked }) => {
+  orca.panels.handle('branch.lock', async ({ projectId, branch, locked }) => {
+    if (branch !== undefined) {
+      // Only a worktree card the panel listed, locked by repository and branch.
+      const card = snapshot?.worktrees.find((p) => p.id === projectId && p.branch === branch)
+      if (card?.worktree) {
+        const { [pinKey(card.id, branch)]: _old, ...rest } = await savedWorktreeLocks()
+        await orca.storage.set(WLOCKS_KEY, locked ? { ...rest, [pinKey(card.id, branch)]: { repo: card.id, branch, worktree: card.worktree } } : rest)
+      }
+      return refresh(false)
+    }
     // Only a project the panel listed, locked on the branch it shows.
     const listed = snapshot?.projects.find((p) => p.id === projectId)
     if (listed) {
