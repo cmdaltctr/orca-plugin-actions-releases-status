@@ -562,7 +562,7 @@ test('opened cards sit under the pinned card', async () => {
   await view.unmount()
 })
 
-test('the pin button shows 📌 or 🎯 Pinned and asks the worker', async () => {
+test('the pin button is a star, outlined when pinned, and asks the worker', async () => {
   const sent: unknown[] = []
   const view = await mount(panel, {
     host: host({
@@ -576,9 +576,10 @@ test('the pin button shows 📌 or 🎯 Pinned and asks the worker', async () =>
       }
     })
   })
-  assert.ok(view.find({ type: 'Button', text: '🎯 Pinned' }))
-  await view.press({ type: 'Button', text: '📌' })
-  await view.press({ type: 'Button', text: '🎯 Pinned' })
+  assert.ok(view.find({ type: 'IconButton', icon: 'star', label: 'Unpin Acme/Tool', variant: 'outline' }))
+  assert.ok(view.find({ type: 'IconButton', icon: 'star', label: 'Pin acme/widget', variant: 'ghost' }))
+  await view.press({ type: 'IconButton', label: 'Pin acme/widget' })
+  await view.press({ type: 'IconButton', label: 'Unpin Acme/Tool' })
   assert.deepEqual(sent, [{ projectId: 'acme/widget', pinned: true }, { projectId: 'Acme/Tool', pinned: false }])
   await view.unmount()
 })

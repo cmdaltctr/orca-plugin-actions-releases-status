@@ -48,7 +48,8 @@ The kit is fixed. Check these before you promise a look to the user.
 - Five tones only: `neutral`, `accent`, `success`, `warning`, `danger`. There is no purple and no blue.
 - An `IconButton` uses `tone` for `danger` only. Other tones have no effect on it. A `Button` cannot take a text colour.
 - There is no pull-request, pin or lock icon. The icon list is in `IconName` in the typings.
-- When the kit cannot draw something, use an emoji or a word, and tell the user why. Pin: `📌` when unpinned, `🎯 Pinned` when pinned.
+- When the kit cannot draw something, use an emoji or a word, and tell the user why.
+- Pin is a `star` `IconButton`, as in orca-plugin-openspec: `outline` when pinned, `ghost` when not.
 - A `Switch` always has 12px of space before it, for its label. The panel hides the label with a zero-width space. To make the gaps on both sides of a switch equal, use `gap="sm"` after it, because a ghost button adds 8px of its own padding.
 - Gaps: `xs` 4px, `sm` 8px, `md` 12px, `lg` 16px.
 - Give `wrap` to every `Row` that holds badges, a PR line or buttons. Without it the row overflows on a narrow panel.

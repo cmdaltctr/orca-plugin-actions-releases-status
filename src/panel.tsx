@@ -257,14 +257,14 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
                     tooltip={`Lock: keep this card on ${project.branch} when you focus another project.`}
                     variant="ghost"
                   />
-                  <Button
-                    variant="ghost"
-                    size="xs"
+                  <IconButton
+                    icon="star"
+                    label={`${project.pinned ? 'Unpin' : 'Pin'} ${project.id}`}
                     tooltip={project.pinned ? 'Unpin: cards opened from PRs go under their own project' : 'Pin: cards opened from PRs go under this card'}
+                    variant={project.pinned ? 'outline' : 'ghost'}
+                    size="xs"
                     onPress={() => void pinCard(project.id, !project.pinned)}
-                  >
-                    {project.pinned ? '🎯 Pinned' : '📌'}
-                  </Button>
+                  />
                 </Row>
               </>
             )}
