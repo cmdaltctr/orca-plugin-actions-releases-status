@@ -4,10 +4,13 @@ Shows the pull requests, GitHub Actions checks and release state of the project 
 
 ## Install
 
-1. Open the plugin page: <https://www.onorca.dev/plugins/cmdaltctr/orca-plugin-actions-releases-status>.
-2. Press the install link. Orca opens the plugin page in Settings → Plugins.
-3. Read the access list that Orca shows, then press **Install**.
-4. Sign in to the `gh` CLI on your machine: `gh auth login`.
+1. In Orca, open **Settings → Plugins**.
+2. Choose **Add plugin**, then **From a Git URL…**.
+3. Paste this URL and choose **Install**: `https://github.com/cmdaltctr/orca-plugin-prs-actions-releases-status#v0.1.0`
+4. Read the access list that Orca shows, then enable the plugin.
+5. Sign in to the `gh` CLI on your machine: `gh auth login`.
+
+When the plugin is in the [Orca plugin directory](https://www.onorca.dev/plugins/cmdaltctr/orca-plugin-prs-actions-releases-status), you can also install it from there.
 
 ### Access the plugin asks for
 
@@ -44,11 +47,11 @@ The plugin lists every Orca worktree of the focused project. A worktree shows wh
 
 | Dot | Meaning |
 | --- | --- |
-| orange | Checks still run, or the PR is a draft, has merge conflicts, or GitHub has not yet said if it can merge. |
-| green | Ready to merge: every check passed and the PR can merge. Reviews are not read. |
-| red | A check failed. |
+| 🟠 orange | Checks still run, or the PR is a draft, has merge conflicts, or GitHub has not yet said if it can merge. |
+| 🟢 green | Ready to merge: every check passed and the PR can merge. Reviews are not read. |
+| 🔴 red | A check failed. |
 | 🟣 purple | The PR was merged. Orca's components have no purple tone, so a purple emoji carries the colour. |
-| grey | The PR was closed without a merge. |
+| ⚪ grey | The PR was closed without a merge. |
 
 - Click the worktree name to open its card on the Actions tab, below the other cards. The card shows the checks of that branch, with retry buttons. Its X closes it. Opened cards go when Orca restarts.
 - Click the open button to open the PR on GitHub.
