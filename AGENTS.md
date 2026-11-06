@@ -18,7 +18,7 @@ orca plugin dev reload .   # loads the change into the running Orca
 | File | Does |
 | --- | --- |
 | `src/protocol.ts` | The panel to worker contract: request names, `StatusSnapshot`, `ProjectStatus`, `WorktreePr`. Change it first. |
-| `src/handlers.ts` | The worker: detects the focused project, reads GitHub, holds locks, the pin and opened cards. |
+| `src/handlers.ts` | The worker: detects the focused project, reads GitHub, holds locks, pins, opened cards and worktree cards. |
 | `src/facts.ts` | Every `gh`, git, npm and HTTP call, behind the `Io` interface. |
 | `src/status.ts` | Pure rules: run and check states, release stages, `prState` for the PRs tab. |
 | `src/projects.ts` | Release flow detection, repository parsing, settings checks. |
@@ -58,8 +58,10 @@ The kit is fixed. Check these before you promise a look to the user.
 ## Behaviour patterns
 
 - One card per project, keyed by repository. Cards opened from the PRs tab are keyed by repository and branch.
-- An opened card sits under the pinned card. With no pin, it sits under its own project's card. Opened cards live in worker memory and go when Orca restarts.
-- Lock and pin are saved in plugin storage (`locks`, `pin`). One card is pinned at a time.
+- An opened card sits under its own project's card. Opened cards live in worker memory and go when Orca restarts.
+- The All worktrees scope shows `snapshot.worktrees`: one card per worktree branch of the focused project, empty with fewer than two. These cards have `worktree` set, and `detected` marks the focused one. They have no lock, branch picker or close button.
+- Lock and pins are saved in plugin storage (`locks`, `pins`). Any number of cards can be pinned. A project card is pinned by its lower-case repository; an opened or worktree card by `repo@branch`, so one pin marks both. Pinned cards form a Pinned group above the rest, also when sorted.
+- Search, state filter and sort run in the panel (`matches`, `sortCards` in `src/panel.tsx`) on the cards the worker sent. A pin on a deleted worktree's branch stays in storage; it is harmless.
 - Each look first drops what a deleted worktree left behind (`dropDeletedWorktrees`): its opened card and a lock on its branch. It keeps a lock on the default branch and on a project with no local worktree. It does nothing when `workspace.list` is truncated.
 - A handler acts only on what the last snapshot listed: a project, a branch or a run id. It never acts on an id the panel did not show.
 - A failed GitHub read keeps the last answer. It does not clear the list.

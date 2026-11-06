@@ -229,6 +229,8 @@ export interface View {
   locked: boolean
   /** A card opened from the PRs tab. */
   opened?: boolean
+  /** A card of the sibling scope: the worktree's name. */
+  worktree?: string
 }
 
 /** What GitHub says about a worktree's pull request, with its checks already summed up by `checksOf`. */
@@ -288,6 +290,7 @@ export function classify(def: ProjectDef, f: Facts, view: View): ProjectStatus {
     detected: view.detected,
     locked: view.locked,
     opened: view.opened === true,
+    ...(view.worktree ? { worktree: view.worktree } : {}),
     flow: def.kind ? 'release' : 'actions',
     flowNote: flowNote(def),
     settings: def.settings,
@@ -311,6 +314,7 @@ export function unknownStatus(def: ProjectDef, error: unknown, view: View): Proj
     detected: view.detected,
     locked: view.locked,
     opened: view.opened === true,
+    ...(view.worktree ? { worktree: view.worktree } : {}),
     flow: def.kind ? 'release' : 'actions',
     flowNote: flowNote(def),
     settings: def.settings,

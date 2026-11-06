@@ -66,7 +66,7 @@ const prs: WorktreePr[] = [
   { worktree: 'widget-old', branch: 'old', number: 3, url: 'https://github.com/Acme/Widget/pull/3', title: 'chore: old', state: 'closed', reason: '' }
 ]
 
-const snapshot: StatusSnapshot = { checkedAt: Date.UTC(2026, 10, 3, 9, 0), projects: [widget, tool], opened: [], worktreePrs: prs }
+const snapshot: StatusSnapshot = { checkedAt: Date.UTC(2026, 10, 3, 9, 0), projects: [widget, tool], opened: [], worktrees: [], worktreePrs: prs }
 
 const host = (requests: Parameters<typeof mockHost>[0] = {}) =>
   mockHost({
@@ -554,11 +554,152 @@ test('an opened card sits under its own repository card when nothing is pinned',
   await view.unmount()
 })
 
-test('opened cards sit under the pinned card', async () => {
-  const projects = [{ ...tool, pinned: true, branch: 'trunk' }, widget]
-  const view = await mount(panel, { host: host({ requests: { 'status.get': () => ({ ...snapshot, projects, opened: [chatCard] }) } }) })
-  // The pinned Tool card, then the opened widget card, then widget's own card.
-  assert.deepEqual(cardOrder(view), ['Checks on trunk', 'Checks on fix/chat', 'Checks on main'])
+test('pinned cards sit in a Pinned group above the rest, whatever their kind', async () => {
+  const projects = [widget, { ...tool, pinned: true, branch: 'trunk' }]
+  const opened = [{ ...chatCard, pinned: true }]
+  const view = await mount(panel, { host: host({ requests: { 'status.get': () => ({ ...snapshot, projects, opened }) } }) })
+  // The pinned opened card and the pinned Tool card first, then the unpinned widget card.
+  assert.deepEqual(cardOrder(view), ['Checks on fix/chat', 'Checks on trunk', 'Checks on main'])
+  assert.ok(view.find({ type: 'Badge', text: '2' }))
+  await view.unmount()
+})
+
+/** A card of the sibling scope: one worktree branch of Widget, with the given Actions state. */
+const sibling = (worktree: string, branch: string, overall: ProjectStatus['overall'], over: Partial<ProjectStatus> = {}): ProjectStatus => ({
+  ...widget,
+  flow: 'actions',
+  detected: false,
+  worktree,
+  branch,
+  branches: [branch],
+  overall,
+  actions: { overall, summary: '' },
+  checks: [],
+  branchPr: null,
+  ...over
+})
+const siblings = [
+  sibling('widget', 'main', 'ok', { detected: true }),
+  sibling('widget-chat', 'fix/chat', 'running'),
+  sibling('widget-lint', 'fix/lint', 'failed'),
+  sibling('widget-ocr', 'fix/ocr', 'ok')
+]
+const withSiblings = (worktrees: ProjectStatus[]) => host({ requests: { 'status.get': () => ({ ...snapshot, worktrees }) } })
+/** Worktree names (the grey badge of each sibling card), top to bottom. */
+const worktreeOrder = (view: Awaited<ReturnType<typeof mount>>) =>
+  view.findAll({ type: 'Badge', text: /^widget(-|$)/ }).map((node) => node.text)
+const openAll = async (view: Awaited<ReturnType<typeof mount>>) => view.select({ label: 'Actions scope' }, 'all')
+
+test('the scope tabs show only when the project has sibling worktrees', async () => {
+  const none = await mount(panel, { host: host() })
+  assert.equal(none.find({ role: 'tab', text: 'All worktrees' }), null)
+  await none.unmount()
+  const some = await mount(panel, { host: withSiblings(siblings) })
+  assert.ok(some.find({ role: 'tab', text: 'This worktree' }))
+  assert.ok(some.find({ role: 'tab', text: 'All worktrees' }))
+  // The first scope keeps the project cards.
+  assert.ok(some.find({ label: 'Widget' }))
+  assert.equal(some.find({ type: 'Badge', text: 'widget-chat' }), null)
+  await some.unmount()
+})
+
+test('All worktrees shows one card per worktree branch, marks the focused one, and hides the project cards', async () => {
+  const view = await mount(panel, { host: withSiblings(siblings) })
+  await openAll(view)
+  assert.deepEqual(worktreeOrder(view), ['widget', 'widget-chat', 'widget-lint', 'widget-ocr'])
+  assert.ok(view.find({ type: 'Badge', text: 'This worktree' }))
+  assert.equal(view.find({ label: 'Add a project' }), null)
+  assert.equal(view.find({ role: 'switch' }), null)
+  assert.equal(view.find({ type: 'Select', label: /Branch of/ }), null)
+  assert.equal(view.find({ type: 'IconButton', label: /^(Remove|Close) / }), null)
+  await view.unmount()
+})
+
+test('Show worktree narrows All worktrees to one', async () => {
+  const view = await mount(panel, { host: withSiblings(siblings) })
+  await openAll(view)
+  await view.select({ label: 'Show worktree' }, 'widget-lint')
+  assert.deepEqual(worktreeOrder(view), ['widget-lint'])
+  assert.ok(view.find({ text: 'Showing 1 of 4 cards' }))
+  await view.unmount()
+})
+
+test('search keeps the cards whose project, branch or worktree holds the text, in any case', async () => {
+  // `type` adds to the text already in the box, so each search starts from a fresh panel.
+  const search = async (text: string) => {
+    const view = await mount(panel, { host: withSiblings(siblings) })
+    await openAll(view)
+    await view.type({ label: 'Search cards' }, text)
+    return view
+  }
+  const byWorktree = await search('LINT')
+  assert.deepEqual(worktreeOrder(byWorktree), ['widget-lint'])
+  await byWorktree.unmount()
+  const byBranch = await search('fix/')
+  assert.deepEqual(worktreeOrder(byBranch), ['widget-chat', 'widget-lint', 'widget-ocr'])
+  await byBranch.unmount()
+  const none = await search('nothing like this')
+  assert.ok(none.find({ text: 'No card matches' }))
+  await none.unmount()
+})
+
+test('the state filter keeps only failing, running or passing cards', async () => {
+  const view = await mount(panel, { host: withSiblings(siblings) })
+  await openAll(view)
+  await view.select({ label: 'Show state' }, 'failed')
+  assert.deepEqual(worktreeOrder(view), ['widget-lint'])
+  await view.select({ label: 'Show state' }, 'running')
+  assert.deepEqual(worktreeOrder(view), ['widget-chat'])
+  await view.select({ label: 'Show state' }, 'ok')
+  assert.deepEqual(worktreeOrder(view), ['widget', 'widget-ocr'])
+  await view.unmount()
+})
+
+test('sort puts failing or passing cards first, or goes by name', async () => {
+  const view = await mount(panel, { host: withSiblings(siblings) })
+  await openAll(view)
+  await view.select({ label: 'Sort cards' }, 'failing')
+  assert.deepEqual(worktreeOrder(view), ['widget-lint', 'widget-chat', 'widget', 'widget-ocr'])
+  await view.select({ label: 'Sort cards' }, 'passing')
+  assert.deepEqual(worktreeOrder(view), ['widget', 'widget-ocr', 'widget-chat', 'widget-lint'])
+  await view.select({ label: 'Sort cards' }, 'name-desc')
+  assert.deepEqual(worktreeOrder(view), ['widget-ocr', 'widget-lint', 'widget-chat', 'widget'])
+  await view.select({ label: 'Sort cards' }, 'name-asc')
+  assert.deepEqual(worktreeOrder(view), ['widget', 'widget-chat', 'widget-lint', 'widget-ocr'])
+  await view.unmount()
+})
+
+test('pinned cards stay above the rest when the list is sorted', async () => {
+  const pinned = siblings.map((card) => (card.worktree === 'widget-ocr' ? { ...card, pinned: true } : card))
+  const view = await mount(panel, { host: withSiblings(pinned) })
+  await openAll(view)
+  await view.select({ label: 'Sort cards' }, 'failing')
+  assert.deepEqual(worktreeOrder(view), ['widget-ocr', 'widget-lint', 'widget-chat', 'widget'])
+  await view.unmount()
+})
+
+test('a worktree card and an opened card pin by branch', async () => {
+  const sent: unknown[] = []
+  const view = await mount(panel, {
+    host: host({
+      requests: {
+        'status.get': () => ({ ...snapshot, opened: [chatCard], worktrees: siblings }),
+        'card.pin': (input: unknown) => {
+          sent.push(input)
+          return { ...snapshot, opened: [chatCard], worktrees: siblings }
+        }
+      }
+    })
+  })
+  await view.press({ type: 'IconButton', label: 'Pin acme/widget' })
+  await view.press({ type: 'IconButton', label: 'Pin acme/widget fix/chat' })
+  await openAll(view)
+  await view.press({ type: 'IconButton', label: 'Pin acme/widget fix/lint' })
+  assert.deepEqual(sent, [
+    { projectId: 'acme/widget', pinned: true },
+    { projectId: 'acme/widget', branch: 'fix/chat', pinned: true },
+    { projectId: 'acme/widget', branch: 'fix/lint', pinned: true }
+  ])
   await view.unmount()
 })
 

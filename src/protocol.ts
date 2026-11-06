@@ -74,8 +74,10 @@ export interface ProjectStatus {
   locked: boolean
   /** true for a card opened from the PRs tab: one fixed branch, closed by the user. */
   opened: boolean
-  /** true for the one pinned card: cards opened from the PRs tab sit under it. */
+  /** true for a pinned card. Pinned cards sit in a Pinned group above the rest, and several can be pinned. */
   pinned?: boolean
+  /** Set on a card of the sibling scope: the worktree's name in Orca. `detected` then marks the focused worktree. */
+  worktree?: string
   /** `release` projects have a release flow and stages. `actions` projects show GitHub Actions only. */
   flow: 'release' | 'actions'
   /** The headline state: the release state for a `release` project, the Actions state otherwise. */
@@ -107,6 +109,8 @@ export interface StatusSnapshot {
   projects: ProjectStatus[]
   /** Cards opened from the PRs tab, oldest first. They last until closed or until Orca restarts. */
   opened: ProjectStatus[]
+  /** One Actions card per worktree branch of the focused project, the focused one first. Empty with fewer than two. */
+  worktrees: ProjectStatus[]
   /** The pull requests of the focused project's local worktrees. Worktrees with no PR are left out. */
   worktreePrs: WorktreePr[]
   /** Why no project was detected from the focused workspace. Unset when one was. */
@@ -128,8 +132,8 @@ declare module 'orca' {
     'branch.lock': { input: { projectId: string; locked: boolean }; output: StatusSnapshot }
     /** Opens a card on the Actions tab for the branch of a worktree the PRs tab listed. */
     'card.open': { input: { branch: string }; output: StatusSnapshot }
-    /** Pins one listed project card, or unpins it. Pinning another card moves the pin. */
-    'card.pin': { input: { projectId: string; pinned: boolean }; output: StatusSnapshot }
+    /** Pins a listed card, or unpins it. `branch` names an opened or worktree card; without it the card is the project's. */
+    'card.pin': { input: { projectId: string; branch?: string; pinned: boolean }; output: StatusSnapshot }
     /** Closes a card opened from the PRs tab. */
     'card.close': { input: { projectId: string; branch: string }; output: StatusSnapshot }
     /** Adds a repository (`owner/name` or a GitHub URL) after checking that `gh` can read it. */

@@ -19,7 +19,7 @@ The plugin runs its own code in a separate Node.js process with your user accoun
 | Capability | Used for |
 | --- | --- |
 | `workspace:read` | Read the name, branch and terminals of the focused workspace. |
-| `storage:own` | Save locks, the pin, added projects and settings in the plugin's own storage. |
+| `storage:own` | Save locks, the pins, added projects and settings in the plugin's own storage. |
 | `notifications:show` | Send a desktop notification when a release needs you or fails. |
 | `agent:read` | Read agent status, to list the agent terminals you can pick. |
 | `terminal:send` | Type your release slash command into the agent terminal you pick. |
@@ -64,8 +64,10 @@ The plugin lists every Orca worktree of the focused project. A worktree shows wh
 - **Retry**: a failed or cancelled check of a GitHub Actions run has a retry button. It runs `gh run rerun --failed` on that run. A failed check from outside GitHub Actions, such as Codecov, has no retry. It has an info icon instead: hover over it to read `Not a GitHub Actions job, cannot re-run.` Click a check to open it on GitHub.
 - **Branch picker**: lists the branches of your local checkouts of the same repository (every Orca worktree), then the default branch. The pick resets when you focus another workspace.
 - **Lock branch**: each card has a switch. Hover the ⓘ icon beside it to see what the lock does. Turn it on and the card keeps its project and branch when you focus a workspace of another project, and it stays listed. The badge reads **Locked** or **Unlocked**. Picking another branch while locked moves the lock to it. Turn the switch off to follow the focused workspace again. A card that was listed only because of its lock then disappears. The lock is stored on your machine and survives a restart.
-- **Pin**: each card has a pin button. It is a star, as in the OpenSpec plugin. The star has an outline when the card is pinned. One card is pinned at a time; pinning another card moves the pin. Cards opened from the PRs tab sit under the pinned card. With no pin, they sit under the card of their own project. The pin is stored on your machine and survives a restart.
+- **Pin**: every card has a pin button, also an opened card and a worktree card. It is a star, as in the OpenSpec plugin. The star has an outline when the card is pinned. Pinned cards form a **Pinned** group above the other cards. You can pin as many cards as you like. A card opened from the PRs tab sits under the card of its own project. Pins are stored on your machine and survive a restart. A pin from an earlier version (one pinned project) is not carried over: pin the card again.
 - **State**: **Passing**, **Running** or **Failing**, from those checks.
+- **This worktree and All worktrees**: when the focused project has two or more worktrees, two tabs appear at the top of the Actions tab. **This worktree** shows the project cards, as before. **All worktrees** shows one card per worktree branch of the focused project, the focused worktree first and marked **This worktree**. Each card shows the checks of that branch. A **Show worktree** select narrows the list to one worktree. These cards have a pin button and no lock, branch picker or close button.
+- **Search, state filter and sort**: above the cards, in both tabs. **Search cards** keeps the cards whose project, branch or worktree name holds the text, in any case. **Show state** keeps only failing, running or passing cards. **Sort cards** orders them: default order, failing first, passing first, name A to Z or name Z to A. Pinned cards stay above the rest. A line reads "Showing 2 of 4 cards" while a filter hides some.
 
 ## Releases tab
 

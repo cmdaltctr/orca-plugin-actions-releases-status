@@ -43,6 +43,18 @@ type View = 'prs' | 'actions' | 'releases'
 const view = atom<View>('actions')
 /** Unsaved edits of the Settings fields, by project. */
 const settingsDraft = atom<Record<string, Partial<ProjectSettings>>>({})
+/** Value of "everything" in the state and worktree filters. */
+const EVERY = 'every'
+/** 'here' shows the project cards; 'all' shows one card per worktree branch of the focused project. */
+const scope = atom('here')
+/** Worktree name the All worktrees scope shows; EVERY shows them all. */
+const worktreeShown = atom(EVERY)
+/** Search text; a card shows when its project, branch or worktree name holds it, in any case. */
+const query = atom('')
+/** Actions state the cards are filtered to; EVERY shows them all. */
+const stateShown = atom(EVERY)
+/** How the cards are ordered; 'default' keeps the order the worker gave. */
+const sortBy = atom('default')
 
 /** Orca needs a non-empty Switch label; this one shows nothing. */
 const ZERO_WIDTH = '\u200b'
@@ -81,8 +93,9 @@ const openCard = async (branch: string): Promise<void> => {
   set(view, 'actions')
   await show(() => plugin.request('card.open', { branch }, REQUEST))
 }
-const pinCard = (projectId: string, pinned: boolean) =>
-  show(() => plugin.request('card.pin', { projectId, pinned }, REQUEST))
+/** An opened or worktree card is pinned by its branch; a project card by its repository alone. */
+const pinCard = (card: ProjectStatus, pinned: boolean) =>
+  show(() => plugin.request('card.pin', { projectId: card.id, ...(card.opened || card.worktree ? { branch: card.branch } : {}), pinned }, REQUEST))
 const closeCard = (projectId: string, branch: string) =>
   show(() => plugin.request('card.close', { projectId, branch }, REQUEST))
 
@@ -231,6 +244,21 @@ function BranchPrLine({ project }: { project: ProjectStatus }) {
 }
 
 /** The Actions tab: the checks of one branch's newest commit, with the branch picker and project controls. */
+/** The star, as in the OpenSpec plugin: `outline` when pinned, `ghost` when not. Any card can be pinned. */
+function PinButton({ project }: { project: ProjectStatus }) {
+  const name = project.opened || project.worktree ? `${project.id} ${project.branch}` : project.id
+  return (
+    <IconButton
+      icon="star"
+      label={`${project.pinned ? 'Unpin' : 'Pin'} ${name}`}
+      tooltip={project.pinned ? 'Pinned to the top. Press to unpin.' : 'Pin to the top'}
+      variant={project.pinned ? 'outline' : 'ghost'}
+      size="xs"
+      onPress={() => void pinCard(project, !project.pinned)}
+    />
+  )
+}
+
 function ActionsCard({ project }: { project: ProjectStatus }) {
   return (
     <Card title={project.name} description={project.actions.summary}>
@@ -238,9 +266,15 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
         <Row gap="xs" align="center" justify="between">
           <Row gap="xs" align="center" wrap>
             <Badge tone={TONE[project.actions.overall]}>{ACTIONS_WORDS[project.actions.overall]}</Badge>
-            {project.detected ? <Badge tone="neutral">This project</Badge> : null}
-            {project.opened ? (
-              <Badge tone="neutral">{project.branch}</Badge>
+            {project.worktree ? <Badge tone="neutral">{project.worktree}</Badge> : null}
+            {project.detected ? <Badge tone="neutral">{project.worktree ? 'This worktree' : 'This project'}</Badge> : null}
+            {project.worktree ? (
+              <PinButton project={project} />
+            ) : project.opened ? (
+              <>
+                <Badge tone="neutral">{project.branch}</Badge>
+                <PinButton project={project} />
+              </>
             ) : (
               <>
                 <Badge tone={project.locked ? 'success' : 'warning'}>{project.locked ? 'Locked' : 'Unlocked'}</Badge>
@@ -257,14 +291,7 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
                     tooltip={`Lock: keep this card on ${project.branch} when you focus another project.`}
                     variant="ghost"
                   />
-                  <IconButton
-                    icon="star"
-                    label={`${project.pinned ? 'Unpin' : 'Pin'} ${project.id}`}
-                    tooltip={project.pinned ? 'Unpin: cards opened from PRs go under their own project' : 'Pin: cards opened from PRs go under this card'}
-                    variant={project.pinned ? 'outline' : 'ghost'}
-                    size="xs"
-                    onPress={() => void pinCard(project.id, !project.pinned)}
-                  />
+                  <PinButton project={project} />
                 </Row>
               </>
             )}
@@ -276,7 +303,7 @@ function ActionsCard({ project }: { project: ProjectStatus }) {
               variant="ghost"
               onPress={() => void closeCard(project.id, project.branch)}
             />
-          ) : project.detected ? null : (
+          ) : project.detected || project.worktree ? null : (
             <IconButton
               icon="close"
               label={`Remove ${project.name}`}
@@ -407,39 +434,153 @@ function ReleaseCard({ project }: { project: ProjectStatus }) {
   )
 }
 
-/** Opened cards go under the pinned card; with no pin, under their own repository's card; else last. */
+/** Opened cards go under their own repository's card; one with no such card goes last. */
 function cardOrder(projects: ProjectStatus[], opened: ProjectStatus[]): ProjectStatus[] {
-  const pinned = projects.find((p) => p.pinned)
   const placed = new Set<ProjectStatus>()
   const order = projects.flatMap((project) => {
-    const below = opened.filter((card) => !placed.has(card) && (pinned ? project === pinned : card.id === project.id))
+    const below = opened.filter((card) => !placed.has(card) && card.id === project.id)
     below.forEach((card) => placed.add(card))
     return [project, ...below]
   })
   return [...order, ...opened.filter((card) => !placed.has(card))]
 }
 
-function ActionsView({ projects, opened }: { projects: ProjectStatus[]; opened: ProjectStatus[] }) {
+/** Which Actions states sort first. `unknown` is last either way. */
+const FAILING_FIRST: Overall[] = ['failed', 'blocked', 'running', 'ok', 'unknown']
+const PASSING_FIRST: Overall[] = ['ok', 'running', 'blocked', 'failed', 'unknown']
+
+const labelOf = (card: ProjectStatus): string => card.worktree ?? card.name
+const byName = (a: ProjectStatus, b: ProjectStatus): number => labelOf(a).localeCompare(labelOf(b)) || a.branch.localeCompare(b.branch)
+const byState = (order: Overall[]) => (a: ProjectStatus, b: ProjectStatus): number =>
+  order.indexOf(a.actions.overall) - order.indexOf(b.actions.overall) || byName(a, b)
+
+function sortCards(cards: ProjectStatus[]): ProjectStatus[] {
+  switch (read(sortBy)) {
+    case 'failing':
+      return [...cards].sort(byState(FAILING_FIRST))
+    case 'passing':
+      return [...cards].sort(byState(PASSING_FIRST))
+    case 'name-asc':
+      return [...cards].sort(byName)
+    case 'name-desc':
+      return [...cards].sort(byName).reverse()
+    default:
+      return cards
+  }
+}
+
+function matches(card: ProjectStatus): boolean {
+  const text = read(query).trim().toLowerCase()
+  const state = read(stateShown)
+  return (
+    (state === EVERY || card.actions.overall === state) &&
+    (text === '' || [card.id, card.name, card.branch, card.worktree ?? ''].some((part) => part.toLowerCase().includes(text)))
+  )
+}
+
+const cardKey = (card: ProjectStatus): string =>
+  card.worktree ? `worktree:${card.id}@${card.branch}` : card.opened ? `${card.id}@${card.branch}` : card.id
+
+/** The controls above the cards: worktree (All worktrees only), state filter, sort and search. */
+function CardControls({ worktrees, all }: { worktrees: ProjectStatus[]; all: boolean }) {
+  return (
+    <Stack gap="sm">
+      {all ? (
+        <Select
+          label="Show worktree"
+          value={shownWorktree(worktrees)}
+          options={[
+            { value: EVERY, label: 'All worktrees' },
+            ...worktrees.map((card) => ({ value: card.worktree ?? card.branch, label: card.detected ? `${card.worktree} (this worktree)` : (card.worktree ?? card.branch) }))
+          ]}
+          onChange={(value) => set(worktreeShown, value)}
+        />
+      ) : null}
+      <Select
+        label="Show state"
+        value={read(stateShown)}
+        options={[
+          { value: EVERY, label: 'All states' },
+          { value: 'failed', label: 'Failing' },
+          { value: 'running', label: 'Running' },
+          { value: 'ok', label: 'Passing' }
+        ]}
+        onChange={(value) => set(stateShown, value)}
+      />
+      <Select
+        label="Sort cards"
+        value={read(sortBy)}
+        options={[
+          { value: 'default', label: 'Default order' },
+          { value: 'failing', label: 'Failing first' },
+          { value: 'passing', label: 'Passing first' },
+          { value: 'name-asc', label: 'Name A to Z' },
+          { value: 'name-desc', label: 'Name Z to A' }
+        ]}
+        onChange={(value) => set(sortBy, value)}
+      />
+      <Input label="Search cards" labelHidden placeholder="Search cards" value={read(query)} onChange={(value) => set(query, value)} />
+    </Stack>
+  )
+}
+
+/** A worktree that has gone since it was picked falls back to every worktree. */
+const shownWorktree = (worktrees: ProjectStatus[]): string =>
+  worktrees.some((card) => (card.worktree ?? card.branch) === read(worktreeShown)) ? read(worktreeShown) : EVERY
+
+function ActionsView({ projects, opened, worktrees }: { projects: ProjectStatus[]; opened: ProjectStatus[]; worktrees: ProjectStatus[] }) {
+  // The worker sends no worktree cards when there is nothing to switch between.
+  const hasSiblings = worktrees.length > 0
+  const all = hasSiblings && read(scope) === 'all'
+  const only = shownWorktree(worktrees)
+  const pool = all ? worktrees.filter((card) => only === EVERY || (card.worktree ?? card.branch) === only) : cardOrder(projects, opened)
+  const total = all ? worktrees.length : pool.length
+  const shown = pool.filter(matches)
+  const pinned = sortCards(shown.filter((card) => card.pinned))
+  const rest = sortCards(shown.filter((card) => !card.pinned))
   return (
     <Stack gap="md">
-      {cardOrder(projects, opened).map((project) => (
-        <ActionsCard key={project.opened ? `${project.id}@${project.branch}` : project.id} project={project} />
+      {hasSiblings ? (
+        <Tabs label="Actions scope" value={read(scope)} onChange={(value) => set(scope, value)}>
+          <Tab value="here" label="This worktree" />
+          <Tab value="all" label="All worktrees" />
+        </Tabs>
+      ) : null}
+      {total > 0 ? <CardControls worktrees={worktrees} all={all} /> : null}
+      {shown.length < total ? <Text muted size="xs">{`Showing ${shown.length} of ${total} cards`}</Text> : null}
+      {shown.length === 0 && total > 0 ? <Text muted>No card matches</Text> : null}
+      {pinned.length > 0 ? (
+        <Stack gap="xs">
+          <Row gap="xs" align="center">
+            <Text>Pinned</Text>
+            <Badge tone="neutral">{String(pinned.length)}</Badge>
+          </Row>
+          {pinned.map((card) => (
+            <ActionsCard key={cardKey(card)} project={card} />
+          ))}
+        </Stack>
+      ) : null}
+      {pinned.length > 0 && rest.length > 0 ? <Text>Others</Text> : null}
+      {rest.map((card) => (
+        <ActionsCard key={cardKey(card)} project={card} />
       ))}
-      <Card title="Add a project" description="Any GitHub repository that gh can read.">
-        <Row gap="xs" align="end">
-          <Input
-            label="Repository"
-            labelHidden
-            placeholder="owner/name or GitHub URL"
-            value={read(draft)}
-            onChange={(value) => set(draft, value)}
-            onSubmit={() => void addProject()}
-          />
-          <Button variant="outline" icon="add" disabled={!read(draft).trim()} onPress={() => void addProject()}>
-            Add
-          </Button>
-        </Row>
-      </Card>
+      {all ? null : (
+        <Card title="Add a project" description="Any GitHub repository that gh can read.">
+          <Row gap="xs" align="end">
+            <Input
+              label="Repository"
+              labelHidden
+              placeholder="owner/name or GitHub URL"
+              value={read(draft)}
+              onChange={(value) => set(draft, value)}
+              onSubmit={() => void addProject()}
+            />
+            <Button variant="outline" icon="add" disabled={!read(draft).trim()} onPress={() => void addProject()}>
+              Add
+            </Button>
+          </Row>
+        </Card>
+      )}
     </Stack>
   )
 }
@@ -548,7 +689,7 @@ export default function Panel() {
             <PrsView prs={current.worktreePrs} />
           </Tab>
           <Tab value="actions" label="Actions" icon="play">
-            <ActionsView projects={current.projects} opened={current.opened} />
+            <ActionsView projects={current.projects} opened={current.opened} worktrees={current.worktrees} />
           </Tab>
           <Tab value="releases" label="Releases" icon="rocket">
             <ReleasesView projects={current.projects} />

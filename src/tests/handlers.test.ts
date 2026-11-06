@@ -278,16 +278,55 @@ test('card.open adds a card for a listed worktree branch, once, and card.close r
   await worker.deactivate()
 })
 
-test('card.pin pins one listed card at a time, keeps it in storage, and unpins', async () => {
+test('card.pin pins any listed card, several at once, keeps them in storage, and unpins', async () => {
   const host = hostFor({ id: 'w1' }, { projects: ['Acme/Tool'] })
   const worker = await mount(fakeIo(), host)
   await worker.request('status.get')
   const pinnedOf = (s: { projects: { id: string; pinned?: boolean }[] }) => s.projects.filter((p) => p.pinned).map((p) => p.id)
   assert.deepEqual(pinnedOf(await worker.request('card.pin', { projectId: WIDGET, pinned: true })), [WIDGET])
-  assert.deepEqual(pinnedOf(await worker.request('card.pin', { projectId: 'Acme/Tool', pinned: true })), ['Acme/Tool'])
-  assert.equal(host.data().storage.pin, 'acme/tool')
-  assert.deepEqual(pinnedOf(await worker.request('card.pin', { projectId: 'nope/none', pinned: true })), ['Acme/Tool'])
-  assert.deepEqual(pinnedOf(await worker.request('card.pin', { projectId: 'Acme/Tool', pinned: false })), [])
+  assert.deepEqual(pinnedOf(await worker.request('card.pin', { projectId: 'Acme/Tool', pinned: true })), [WIDGET, 'Acme/Tool'])
+  assert.deepEqual(host.data().storage.pins, ['acme/widget', 'acme/tool'])
+  // A card the last look did not list is ignored.
+  assert.deepEqual(pinnedOf(await worker.request('card.pin', { projectId: 'nope/none', pinned: true })), [WIDGET, 'Acme/Tool'])
+  assert.deepEqual(pinnedOf(await worker.request('card.pin', { projectId: 'Acme/Tool', pinned: false })), [WIDGET])
+  await worker.deactivate()
+})
+
+test('the Actions tab lists one card per worktree branch of the focused project, for the sibling scope', async () => {
+  const worker = await mount(fakeIo())
+  const { worktrees } = await worker.request('status.get')
+  // `other` belongs to another repository, so it is left out.
+  assert.deepEqual(
+    worktrees.map((p) => [p.id, p.worktree, p.branch, p.detected, p.opened, p.locked]),
+    [[WIDGET, 'widget', 'main', true, false, false], [WIDGET, 'widget-v3', 'v3', false, false, false]]
+  )
+  assert.deepEqual(worktrees[1]?.checks.map((c) => c.id), [4, 5])
+  assert.deepEqual(worktrees[1]?.branches, ['v3'])
+  await worker.deactivate()
+})
+
+test('a project with one worktree has no sibling cards', async () => {
+  const worker = await mount(fakeIo(), hostFor({ id: 'w3' }))
+  assert.deepEqual((await worker.request('status.get')).worktrees, [])
+  await worker.deactivate()
+})
+
+test('card.pin pins an opened card and a worktree card by branch, apart from the project pin', async () => {
+  const host = hostFor({ id: 'w1' })
+  const worker = await mount(fakeIo(), host)
+  await worker.request('status.get')
+  await worker.request('card.open', { branch: 'v3' })
+  const pinned = await worker.request('card.pin', { projectId: WIDGET, branch: 'v3', pinned: true })
+  assert.deepEqual(host.data().storage.pins, ['acme/widget@v3'])
+  // The same key marks the opened card and the sibling card of that branch; the project card stays unpinned.
+  assert.deepEqual(pinned.opened.map((p) => p.pinned), [true])
+  assert.deepEqual(pinned.worktrees.map((p) => [p.branch, p.pinned]), [['main', false], ['v3', true]])
+  assert.deepEqual(pinned.projects.map((p) => p.pinned), [false])
+  // A branch that no listed card shows is ignored.
+  await worker.request('card.pin', { projectId: WIDGET, branch: 'gone', pinned: true })
+  assert.deepEqual(host.data().storage.pins, ['acme/widget@v3'])
+  assert.deepEqual((await worker.request('card.pin', { projectId: WIDGET, branch: 'v3', pinned: false })).worktrees.map((p) => p.pinned), [false, false])
+  assert.deepEqual(host.data().storage.pins, [])
   await worker.deactivate()
 })
 
