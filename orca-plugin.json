@@ -3,7 +3,9 @@
   "id": "release-status",
   "name": "PRs, Actions and Releases Status",
   "version": "0.1.0",
-  "description": "GitHub Actions and release status for the project of the focused workspace, any of its branches and any repository you add. Re-runs failed runs and asks an agent to take over.",
+  "description": "Shows the pull requests, GitHub Actions checks and release state of the project in your focused Orca workspace. It is for developers who ship from GitHub. Read the checks of any branch or added repository, re-run failed checks, and ask an agent to take over a release.",
+  "license": "MIT",
+  "publisher": "cmdaltctr",
   "engines": {
     "orca": ">=1.4.246"
   },
@@ -27,5 +29,47 @@
     { "kind": "notifications:show" },
     { "kind": "agent:read" },
     { "kind": "terminal:send" }
+  ],
+  "cover": {
+    "path": "screenshots/cover.png",
+    "alt": "The PRs tab lists five worktrees with a coloured dot and a badge: closed, merged, ready, running and failed."
+  },
+  "screenshots": [
+    {
+      "path": "screenshots/prs.png",
+      "alt": "The PRs tab lists each worktree that has a pull request, with a coloured state badge and a button to open the pull request.",
+      "caption": "PRs tab: the state of each worktree's pull request",
+      "theme": "dark"
+    },
+    {
+      "path": "screenshots/actions-passing.png",
+      "alt": "The Actions tab shows a pull request line and two passed checks for the feat/search-filter branch.",
+      "caption": "Actions tab: checks that passed",
+      "theme": "dark"
+    },
+    {
+      "path": "screenshots/actions-failed.png",
+      "alt": "The Actions tab shows a failed check with a re-run button and a Failing badge for the fix/flaky-timeout branch.",
+      "caption": "Actions tab: a failed check with a re-run button",
+      "theme": "dark"
+    },
+    {
+      "path": "screenshots/actions-running.png",
+      "alt": "The Actions tab shows a running check with a spinner and a Running badge for the feat/slow-build branch.",
+      "caption": "Actions tab: a check that is still running",
+      "theme": "dark"
+    },
+    {
+      "path": "screenshots/releases.png",
+      "alt": "The Releases tab shows an Up to date badge, a passed release run and the GitHub release v0.1.0.",
+      "caption": "Releases tab: the stages of a release",
+      "theme": "dark"
+    },
+    {
+      "path": "screenshots/prs-light.png",
+      "alt": "The PRs tab in the light theme, with closed, merged, ready, running and failed pull requests.",
+      "caption": "PRs tab in the light theme",
+      "theme": "light"
+    }
   ]
 }

@@ -1,6 +1,27 @@
 # PRs, Actions and Releases Status
 
-An Orca right-sidebar panel that shows GitHub Actions checks and release state for the project you are working in.
+Shows the pull requests, GitHub Actions checks and release state of the project in your focused Orca workspace. It is for developers who ship from GitHub. Read the checks of any branch or added repository, re-run failed checks, and ask an agent to take over a release.
+
+## Install
+
+1. Open the plugin page: <https://www.onorca.dev/plugins/cmdaltctr/orca-plugin-actions-releases-status>.
+2. Press the install link. Orca opens the plugin page in Settings → Plugins.
+3. Read the access list that Orca shows, then press **Install**.
+4. Sign in to the `gh` CLI on your machine: `gh auth login`.
+
+### Access the plugin asks for
+
+The plugin runs its own code in a separate Node.js process with your user account's access (a `trusted-worker`). It asks Orca for these capabilities:
+
+| Capability | Used for |
+| --- | --- |
+| `workspace:read` | Read the name, branch and terminals of the focused workspace. |
+| `storage:own` | Save locks, the pin, added projects and settings in the plugin's own storage. |
+| `notifications:show` | Send a desktop notification when a release needs you or fails. |
+| `agent:read` | Read agent status, to list the agent terminals you can pick. |
+| `terminal:send` | Type your release slash command into the agent terminal you pick. |
+
+It also runs the `gh`, `git` and `orca` commands on your machine. It asks the npm registry for the latest version of a public package, and your own updater URL if you set one. It reads no GitHub token and sends no data about you anywhere.
 
 Orca's own Checks panel follows the workspace you have open. This panel also lets you look at another branch from where you are. Work in `main`, pick `v3`, and read the checks of `v3`.
 
